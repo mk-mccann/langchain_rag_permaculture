@@ -1,4 +1,4 @@
 .env
 .vscode/
 api_keys/
-data/books/
+data/
