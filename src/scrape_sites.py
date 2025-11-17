@@ -1,13 +1,20 @@
 import os
 import time
 import json
+import yaml
 import requests
 
 from bs4 import BeautifulSoup
-from urllib.robotparser import RobotFileParser
+from keybert import KeyBERT
+from model2vec import StaticModel
+from markdownify import MarkdownConverter
 from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
 from langdetect import detect, LangDetectException
 
+
+embedding_model = StaticModel.from_pretrained("minishlab/potion-base-8M")
+kw_model = KeyBERT(embedding_model)
 
 
 def load_json_config(file_path):
@@ -15,7 +22,7 @@ def load_json_config(file_path):
         return json.load(file)
     
 
-def is_allowed(url, robots_url):
+def is_allowed_by_robots(url, robots_url):
     rp = RobotFileParser()
     rp.set_url(robots_url)
 
@@ -35,7 +42,46 @@ def is_target_lang(text, target_langs):
         return False  # Skip if language detection fails
 
 
-def scrape_page(url, site_name, target_langs):
+def extract_html_tags(soup):
+    """Extract standard meta tags."""
+    meta_data = {}
+
+    # Standard meta tags
+    for meta in soup.find_all('meta'):
+        if meta.get('name'):
+            meta_data[meta['name']] = meta.get('content', '')
+        elif meta.get('http-equiv'):
+            meta_data[f"http-equiv-{meta['http-equiv']}"] = meta.get('content', '')
+
+    return meta_data
+
+
+def assemble_metadata(soup, url):
+    tags = extract_html_tags(soup)
+
+    # Extract metadata
+    metadata = {
+        "url": str(url),
+        "title": str(soup.title.string) if soup.title else "",
+        "license": "CC BY 3.0",
+        "description": str(tags.get("description", ""))
+    }
+
+    return metadata
+
+
+def bs4_to_md(soup, **options):
+    """Convert BeautifulSoup object to Markdown string.
+    This is from the markdownify library directly"""
+    return MarkdownConverter(**options).convert_soup(soup)
+
+
+def get_keywords(text, num_keywords=5):
+    keywords = kw_model.extract_keywords(text, keyphrase_ngram_range=(1, 2), stop_words=None, top_n=num_keywords)
+    return [kw[0] for kw in keywords]
+
+
+def scrape_page_to_md(url, site_name, target_langs):
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
@@ -45,17 +91,33 @@ def scrape_page(url, site_name, target_langs):
             print(f"Page language not in target. Skipping: {url}")
             return None
 
+        # Get the beautiful soup object
         soup = BeautifulSoup(response.text, "html.parser")
 
-        # Remove unwanted elements (e.g., nav, footer, scripts)
+        # Extract HTML metadata
+        metadata = assemble_metadata(soup, url)
+
+        # Remove unwanted elements (e.g., nav, footer, scripts) before converting to Markdown
         for element in soup(["nav", "footer", "script", "style"]):
             element.decompose()
 
+        # Convert to Markdown
+        md_content = bs4_to_md(soup, separator="\n", bullets='-')
+
+        # Extract keywords
+        metadata["keywords"] = get_keywords(md_content)
+
+        # Create YAML front matter for metadata
+        yaml_frontmatter = yaml.dump(metadata, default_flow_style=False, sort_keys=False, allow_unicode=True)
+
+        # Format the final Markdown with front matter
+        markdown_with_frontmatter = f"---\n{yaml_frontmatter}---\n\n{md_content}"
+
         # Save the page content
-        page_name = f"{site_name}{urlparse(url).path.replace('/', '_') or 'index'}.txt"
-        
+        page_name = f"{site_name}{urlparse(url).path.replace('/', '_') or 'index'}.md"
+    
         with open(os.path.join(output_dir, page_name), "w", encoding="utf-8") as file:
-            file.write(soup.get_text(separator="\n", strip=True))
+            file.write(markdown_with_frontmatter)
         
         print(f"Scraped: {url}")
         return soup
@@ -80,14 +142,22 @@ def get_links(soup, base_url):
 
 def crawl_site(base_url, site_name, target_langs=["en"]):
 
+    # Generally the supplied URL base poitns to a site map. Need to get the main URL from there.
+    # This will also prevent issues with robots.txt checks and from scraping pages not on the main site.
+    url_root = f"{urlparse(base_url).scheme}://{urlparse(base_url).netloc}/"
+
     # disallow crawling certain file types
     disallowed_file_types = ['.png', '.jpg', '.jpeg', '.gif', '.pdf', 
-                             '.docx', '.zip', '.fcstd', '.stl', '.kdenlive']
+                             '.docx', '.zip', '.fcstd', '.stl', '.kdenlive',
+                             '.mp4', '.mp3', '.avi', '.mov', '.svg', '.skp', '.stl',
+                             '.exe', '.dmg', '.iso', '.tar', '.gz', '.rar', '.7z', '.csv',
+                             '.xlsx', '.pptx', '.ini', '.sys', '.dll', '.dxf', '.odt', 
+                             '.ods', '.odp', '.epub', '.mobi', '.dae', '.fbx', '.3ds', '.dxf']
 
     # Check to see if we are allowed to crawl the site and sub-pages
     robots_url = urljoin(base_url, "robots.txt")
     
-    if not is_allowed(base_url, robots_url):
+    if not is_allowed_by_robots(base_url, robots_url):
         print(f"Skipping {base_url}: Disallowed by robots.txt")
         return
 
@@ -102,7 +172,7 @@ def crawl_site(base_url, site_name, target_langs=["en"]):
             continue
 
         # Skip disallowed file types
-        if any([disallowed_file_types in url for disallowed_file_types in disallowed_file_types]):
+        if any([disallowed_file_types in url.rsplit(".")[0] for disallowed_file_types in disallowed_file_types]):
             continue
 
         # Skip any URLs related to users
@@ -113,9 +183,9 @@ def crawl_site(base_url, site_name, target_langs=["en"]):
         visited_urls.add(url)
 
         # Scrape the page
-        soup = scrape_page(url, site_name, target_langs)
+        soup = scrape_page_to_md(url, site_name, target_langs)
         if soup:
-            new_links = get_links(soup, base_url)
+            new_links = get_links(soup, url_root)
             queue.update(new_links - visited_urls)
             time.sleep(delay_seconds)
 
