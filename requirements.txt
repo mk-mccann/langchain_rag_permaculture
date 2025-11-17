@@ -10,3 +10,8 @@ tiktoken # For embeddings
 beautifulsoup4
 onnxruntime
 langdetect
+markdownify
+keybert
+scikit-learn
+pyyaml
+model2vec
