@@ -5,16 +5,11 @@ import yaml
 import requests
 
 from bs4 import BeautifulSoup
-from keybert import KeyBERT
-from model2vec import StaticModel
 from markdownify import MarkdownConverter
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 from langdetect import detect, LangDetectException
 
-
-embedding_model = StaticModel.from_pretrained("minishlab/potion-base-8M")
-kw_model = KeyBERT(embedding_model)
 
 
 def load_json_config(file_path):
@@ -56,14 +51,15 @@ def extract_html_tags(soup):
     return meta_data
 
 
-def assemble_metadata(soup, url):
+def assemble_metadata(soup, url, config):
     tags = extract_html_tags(soup)
 
     # Extract metadata
     metadata = {
         "url": str(url),
+        "access_date": time.strftime("%Y-%m-%d"),
         "title": str(soup.title.string) if soup.title else "",
-        "license": "CC BY 3.0",
+        "license": str(config.get("license", "")),
         "description": str(tags.get("description", ""))
     }
 
@@ -76,15 +72,26 @@ def bs4_to_md(soup, **options):
     return MarkdownConverter(**options).convert_soup(soup)
 
 
-def get_keywords(text, num_keywords=5):
-    keywords = kw_model.extract_keywords(text, keyphrase_ngram_range=(1, 2), stop_words=None, top_n=num_keywords)
-    return [kw[0] for kw in keywords]
+def scrape_page_to_md(url, config, target_langs):
 
-
-def scrape_page_to_md(url, site_name, target_langs):
     try:
         response = requests.get(url, timeout=5)
         response.raise_for_status()
+
+        page_name = f"{urlparse(url).path.replace('/', '') or 'index'}.md"
+
+        # If we already have this page, dont save it but return the bs4 object
+        if os.path.exists(os.path.join(output_dir, page_name)):
+            print(f"Already scraped. Skipping: {url}")
+
+            # Get the beautiful soup object
+            soup = BeautifulSoup(response.text, "html.parser")
+
+            # Remove unwanted elements (e.g., nav, footer, scripts) before converting to Markdown
+            for element in soup(["nav", "footer", "script", "style"]):
+                element.decompose()
+
+            return soup
 
         # Check if the page is in English
         if not is_target_lang(response.text, target_langs):
@@ -95,7 +102,7 @@ def scrape_page_to_md(url, site_name, target_langs):
         soup = BeautifulSoup(response.text, "html.parser")
 
         # Extract HTML metadata
-        metadata = assemble_metadata(soup, url)
+        metadata = assemble_metadata(soup, url, config)
 
         # Remove unwanted elements (e.g., nav, footer, scripts) before converting to Markdown
         for element in soup(["nav", "footer", "script", "style"]):
@@ -104,9 +111,6 @@ def scrape_page_to_md(url, site_name, target_langs):
         # Convert to Markdown
         md_content = bs4_to_md(soup, separator="\n", bullets='-')
 
-        # Extract keywords
-        metadata["keywords"] = get_keywords(md_content)
-
         # Create YAML front matter for metadata
         yaml_frontmatter = yaml.dump(metadata, default_flow_style=False, sort_keys=False, allow_unicode=True)
 
@@ -114,8 +118,6 @@ def scrape_page_to_md(url, site_name, target_langs):
         markdown_with_frontmatter = f"---\n{yaml_frontmatter}---\n\n{md_content}"
 
         # Save the page content
-        page_name = f"{site_name}{urlparse(url).path.replace('/', '_') or 'index'}.md"
-    
         with open(os.path.join(output_dir, page_name), "w", encoding="utf-8") as file:
             file.write(markdown_with_frontmatter)
         
@@ -140,7 +142,8 @@ def get_links(soup, base_url):
     return links
 
 
-def crawl_site(base_url, site_name, target_langs=["en"]):
+def crawl_site(config, target_langs=["en"]):
+    base_url = config['url']      
 
     # Generally the supplied URL base poitns to a site map. Need to get the main URL from there.
     # This will also prevent issues with robots.txt checks and from scraping pages not on the main site.
@@ -154,36 +157,40 @@ def crawl_site(base_url, site_name, target_langs=["en"]):
                              '.xlsx', '.pptx', '.ini', '.sys', '.dll', '.dxf', '.odt', 
                              '.ods', '.odp', '.epub', '.mobi', '.dae', '.fbx', '.3ds', '.dxf']
 
-    # Check to see if we are allowed to crawl the site and sub-pages
-    robots_url = urljoin(base_url, "robots.txt")
-    
-    if not is_allowed_by_robots(base_url, robots_url):
-        print(f"Skipping {base_url}: Disallowed by robots.txt")
-        return
-
     # Queue up the sites to scrape
     queue = {base_url}
 
     while queue:
         url = queue.pop()
 
+        # Check to see if we are allowed to crawl the site and sub-pages
+        robots_url = urljoin(url, "robots.txt")
+    
+        if not is_allowed_by_robots(url, robots_url):
+            print(f"Skipping {url}: Disallowed by robots.txt")
+            continue
+
         # If we've already visited this URL, skip it
         if url in visited_urls:
             continue
 
         # Skip disallowed file types
-        if any([disallowed_file_types in url.rsplit(".")[0] for disallowed_file_types in disallowed_file_types]):
+        if any([disallowed_file_types in url for disallowed_file_types in disallowed_file_types]):
             continue
 
         # Skip any URLs related to users
         if "User" in url or "/users/" in url:
             continue
 
+        # If this is a file, skip it
+        if "File:" in url or "/files/" in url:
+            continue
+
         # Mark URL as visited
         visited_urls.add(url)
 
         # Scrape the page
-        soup = scrape_page_to_md(url, site_name, target_langs)
+        soup = scrape_page_to_md(url, config, target_langs)
         if soup:
             new_links = get_links(soup, url_root)
             queue.update(new_links - visited_urls)
@@ -194,7 +201,7 @@ if __name__ == "__main__":
 
     # Configuration
     input_file = "../config/urls.json"
-    output_dir = "../data/raw/scraped_pages"
+    base_output_dir = "../data/raw/scraped_pages"
 
     target_langs = ['en']  # Target language for scraping
 
@@ -202,17 +209,25 @@ if __name__ == "__main__":
     delay_seconds = 1  # Rate limiting
 
     # Make outptut directory if it doesn't exist
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    if not os.path.exists(base_output_dir):
+        os.makedirs(base_output_dir)
 
     # Load URLs from config
-    urls_config = load_json_config(input_file)
+    config = load_json_config(input_file)
 
     # Loop through each URL in the config and get sub-pages if allowed
-    for url in urls_config:
-        site_name = url['name']
-        base_url = url['url']  
-        print(f"\nCrawling {site_name} ({base_url})")
-        crawl_site(base_url, site_name, target_langs=target_langs)
+    for cfg in config:
+        site_name = cfg['name']
+        base_url = cfg['url']  
 
-    print(f"\nDone! Scraped {len(visited_urls)} pages to {output_dir}/")
+        output_dir = os.path.join(base_output_dir, site_name.replace(" ", "_"))
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+
+        print(f"\nCrawling {site_name} ({base_url})")
+        crawl_site(cfg, target_langs=target_langs)
+
+        print(f"\nScraped {len(visited_urls)} pages to {output_dir}/")
+        visited_urls.clear()  # Clear for next site
+
+    print("\nScraping completed.")
