@@ -1,17 +1,24 @@
 python-dotenv # For reading environment 
+pyyaml
+numpy
+scipy
+scikit-learn
+opencv-python # Needed for OCR in PyMuPDF
+unstructured # Document loading
+pymupdf     # PDF handling
+pymupdf4llm # PDF to markdown conversion
+beautifulsoup4 # HTML parsing
+langdetect # Language detection
+markdown 
+markdownify # HTML to markdown conversion
+transformers
+keybert # For keyword extraction
+model2vec # For keyword embeddings
 langchain
 langchain-community
 langchain-mistralai
-unstructured # Document loading
-markdown
 chromadb # Vector storage
 mistralai # LLM
 tiktoken # For embeddings 
-beautifulsoup4
 onnxruntime
-langdetect
-markdownify
-keybert
-scikit-learn
-pyyaml
-model2vec
+gradio   # For building web UIs
