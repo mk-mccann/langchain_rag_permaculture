@@ -214,5 +214,5 @@ if __name__ == "__main__":
     input_file = Path("../config/urls.json")
     base_output_dir = Path("../data/raw/scraped_pages")
 
-    scraper = HTMLScraper(base_output_dir=base_output_dir, target_langs=['en'], delay_seconds=1)
+    scraper = HTML2MDScraper(base_output_dir=base_output_dir, target_langs=['en'], delay_seconds=1)
     scraper.scrape_from_config(input_file)
