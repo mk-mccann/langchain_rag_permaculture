@@ -5,7 +5,7 @@ from langchain_community.document_loaders import JSONLoader
 from langchain_mistralai.embeddings import MistralAIEmbeddings
 
 
-class CreateChromaDB:
+class createChromaDB:
 
     def __init__(
         self, 
@@ -71,7 +71,6 @@ class CreateChromaDB:
 
         documents = self.load_chunked_documents()
         self.vectorstore.add_documents(documents)
-        # self.vectorstore.persist()
 
 
 if __name__ == "__main__":
@@ -83,9 +82,11 @@ if __name__ == "__main__":
 
     embeddings = MistralAIEmbeddings(model="mistral-embed")
 
-    creator = CreateChromaDB(
+    creator = createChromaDB(
         embeddings=embeddings,
         chunked_docs_dir=Path("../data/chunked_documents"),
         chroma_db_dir=Path("../chroma_db"),
         collection_name="perma_rag_collection"
     )
+
+    
