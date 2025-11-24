@@ -1,8 +1,5 @@
 python-dotenv # For reading environment 
 pyyaml
-numpy
-scipy
-scikit-learn
 opencv-python # Needed for OCR in PyMuPDF
 unstructured # Document loading
 pymupdf     # PDF handling
@@ -12,13 +9,16 @@ langdetect # Language detection
 markdown 
 markdownify # HTML to markdown conversion
 transformers
+transformers[mistral-common]
 keybert # For keyword extraction
 model2vec # For keyword embeddings
 langchain
 langchain-community
 langchain-mistralai
-chromadb # Vector storage
+langchain-chroma
 mistralai # LLM
-tiktoken # For embeddings 
+chromadb # Vector storage
 onnxruntime
+deepeval # Model evaluation
 gradio   # For building web UIs
+tqdm     # Progress bars

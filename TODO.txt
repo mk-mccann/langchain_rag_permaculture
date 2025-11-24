@@ -1,3 +1,3 @@
 Add YAML frontmatter to each scraped document with url and license - DONE
-Chunk MD files
+Chunk MD files - Done
 Vector embedding
