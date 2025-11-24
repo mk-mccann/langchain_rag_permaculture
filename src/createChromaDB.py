@@ -1,0 +1,91 @@
+from pathlib import Path
+
+from langchain_chroma import Chroma
+from langchain_community.document_loaders import JSONLoader
+from langchain_mistralai.embeddings import MistralAIEmbeddings
+
+
+class CreateChromaDB:
+
+    def __init__(
+        self, 
+        embeddings,
+        chunked_docs_dir: Path | str, 
+        chroma_db_dir: Path | str, 
+        collection_name: str = "default_collection"
+        ):
+       
+        """
+        Create a ChromaDB vector database from chunked JSONL files in a specified directory.
+
+        Args:
+            embeddings: Embedding function to use for vectorization.
+            chunked_docs_dir (Path | str): Directory containing markdown files.
+            chroma_db_dir (Path | str): Directory to store the ChromaDB database.
+            collection_name (str): Name of the ChromaDB collection.
+        """
+
+        self.chunked_docs_dir = Path(chunked_docs_dir)
+        self.chroma_db_dir = Path(chroma_db_dir)
+
+        if not self.chroma_db_dir.exists():
+            self.chroma_db_dir.mkdir(parents=True, exist_ok=True)
+
+        self.vectorstore = Chroma(
+            collection_name = collection_name,
+            embedding_function = embeddings,
+            persist_directory = str(self.chroma_db_dir)  # Where to save data locally, remove if not necessary
+        )    
+
+        self.client = Chroma(persist_directory=str(self.chroma_db_dir))
+        # self.collection = self.client.get_or_create_collection(name=self.collection_name)
+
+
+    def load_chunked_documents(self):
+        """
+        Load chunked JSONL documents from the specified directory.
+
+        Returns:
+            List of loaded documents.
+        """
+        all_docs = []
+        jsonl_files = list(self.chunked_docs_dir.glob("**/*.jsonl"))
+
+        for file_path in jsonl_files:
+            loader = JSONLoader(
+                file_path=str(file_path),     
+                jq_schema=".content",
+                text_content=False,
+                json_lines=True)
+                
+            docs = loader.load()
+            all_docs.extend(docs)
+
+        return all_docs
+    
+
+    def embed_and_store(self):
+        """
+        Embed and store the loaded documents into the ChromaDB vector database.
+        """
+
+        documents = self.load_chunked_documents()
+        self.vectorstore.add_documents(documents)
+        # self.vectorstore.persist()
+
+
+if __name__ == "__main__":
+    import os
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    api_key = os.getenv("MISTRAL_API_KEY")
+
+    embeddings = MistralAIEmbeddings(model="mistral-embed")
+
+    creator = CreateChromaDB(
+        embeddings=embeddings,
+        chunked_docs_dir=Path("../data/chunked_documents"),
+        chroma_db_dir=Path("../chroma_db"),
+        collection_name="perma_rag_collection"
+    )
