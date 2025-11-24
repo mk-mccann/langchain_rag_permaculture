@@ -1,5 +1,7 @@
 python-dotenv # For reading environment 
 pyyaml
+torch
+torchvision
 opencv-python # Needed for OCR in PyMuPDF
 unstructured # Document loading
 pymupdf     # PDF handling
