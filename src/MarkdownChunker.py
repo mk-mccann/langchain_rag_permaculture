@@ -334,7 +334,7 @@ class MarkdownChunkerWithKeywordExtraction:
 
     def process_directory(
         self,
-        directory: str,
+        directory: Path | str,
         pattern: str = "**/*.md",
         force_reprocess: bool = False,
         extract_keywords: bool = True
@@ -384,15 +384,19 @@ class MarkdownChunkerWithKeywordExtraction:
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--data_directory",
+        type=str,
+        default="../data/raw",
+        required=True,
+        help="Directory containing markdown files to chunk"
+    )
 
-    if len(sys.argv) < 1:
-        print("Usage: python chunk_files.py <markdown_directory> ...")
-        sys.exit(1)
-    
-    directory_path = sys.argv[1:]
-    directory_path = Path(directory_path[0])
+    args = parser.parse_args()
+    directory_path = Path(args.data_directory)
     
     chunker = MarkdownChunkerWithKeywordExtraction(
         num_keywords=5,
