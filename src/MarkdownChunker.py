@@ -2,7 +2,6 @@ import os
 import re
 import yaml
 import json
-from tqdm import tqdm
 from alive_progress import alive_it
 from datetime import datetime
 from pathlib import Path
