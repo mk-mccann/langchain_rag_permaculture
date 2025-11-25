@@ -1,7 +1,10 @@
 from pathlib import Path
 
+from alive_progress import alive_it
+from mistralai import Mistral
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import JSONLoader
+from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain_mistralai.embeddings import MistralAIEmbeddings
 
 
@@ -38,7 +41,6 @@ class createChromaDB:
         )    
 
         self.client = Chroma(persist_directory=str(self.chroma_db_dir))
-        # self.collection = self.client.get_or_create_collection(name=self.collection_name)
 
 
     def load_chunked_documents(self):
@@ -48,18 +50,24 @@ class createChromaDB:
         Returns:
             List of loaded documents.
         """
+
         all_docs = []
         jsonl_files = list(self.chunked_docs_dir.glob("**/*.jsonl"))
 
-        for file_path in jsonl_files:
+        for file_path in alive_it(jsonl_files, title="Loading chunked documents for ChromaDB"):
             loader = JSONLoader(
                 file_path=str(file_path),     
-                jq_schema=".content",
-                text_content=False,
-                json_lines=True)
+                jq_schema='.',
+                content_key='page_content',
+                json_lines=True,
+                metadata_func=lambda record, metadata: record.get('metadata', {}))
                 
             docs = loader.load()
+            docs = filter_complex_metadata(docs)
             all_docs.extend(docs)
+
+        # Remove any leading/trailing whitespace from document contents and empty entries
+        all_docs = [doc for doc in all_docs if doc.page_content.strip()]
 
         return all_docs
     
@@ -70,6 +78,8 @@ class createChromaDB:
         """
 
         documents = self.load_chunked_documents()
+
+        print(f"Embedding and storing {len(documents)} documents into ChromaDB...")
         self.vectorstore.add_documents(documents)
 
 
@@ -78,15 +88,18 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
 
     load_dotenv()
-    api_key = os.getenv("MISTRAL_API_KEY")
+    api_key = os.getenv("MISTRAL_API_KEY").strip()
 
-    embeddings = MistralAIEmbeddings(model="mistral-embed")
+    # Setup Mistral model and embeddings
+    embeddings = MistralAIEmbeddings(mistral_api_key=api_key, model="mistral-embed")
 
+    # Setup and create ChromaDB
     creator = createChromaDB(
         embeddings=embeddings,
-        chunked_docs_dir=Path("../data/chunked_documents"),
+        chunked_docs_dir=Path("../data/chunked_documents/"),
         chroma_db_dir=Path("../chroma_db"),
         collection_name="perma_rag_collection"
     )
 
-    
+    creator.embed_and_store()
+    print("ChromaDB creation complete.")
