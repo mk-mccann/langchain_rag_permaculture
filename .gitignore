@@ -1,4 +1,9 @@
 .env
 .vscode/
-data/
+.pytest_cache/
 chroma_db/
+data/
+src/__pycache_/
+tests/__pycache_
+tests/.pytest_cache
+_
