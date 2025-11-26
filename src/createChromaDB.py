@@ -1,11 +1,13 @@
+from time import sleep
 from pathlib import Path
 
+from httpx import ReadError
 from alive_progress import alive_it
-from mistralai import Mistral
+from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import JSONLoader
-from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain_mistralai.embeddings import MistralAIEmbeddings
+
 
 
 class createChromaDB:
@@ -30,17 +32,29 @@ class createChromaDB:
 
         self.chunked_docs_dir = Path(chunked_docs_dir)
         self.chroma_db_dir = Path(chroma_db_dir)
+        self.collection_name = collection_name
 
         if not self.chroma_db_dir.exists():
             self.chroma_db_dir.mkdir(parents=True, exist_ok=True)
 
         self.vectorstore = Chroma(
-            collection_name = collection_name,
+            collection_name = self.collection_name,
             embedding_function = embeddings,
-            persist_directory = str(self.chroma_db_dir)  # Where to save data locally, remove if not necessary
+            persist_directory = str(self.chroma_db_dir)
         )    
 
-        self.client = Chroma(persist_directory=str(self.chroma_db_dir))
+
+    def refresh_embeddings(self):
+        """
+        Refresh embeddings in the ChromaDB vector database.
+        """
+
+        embeddings = MistralAIEmbeddings(model="mistral-embed")
+        self.vectorstore = Chroma(
+            collection_name=self.collection_name,
+            embedding_function=embeddings,
+            persist_directory=str(self.chroma_db_dir)
+        )
 
 
     def load_chunked_documents(self):
@@ -72,15 +86,55 @@ class createChromaDB:
         return all_docs
     
 
-    def embed_and_store(self):
+    def embed_and_store(self, 
+                        batch_size: int = 500, 
+                        refresh_interval: int = 4, 
+                        max_exceptions: int = 5,
+                        start_index: int = 0):
         """
-        Embed and store the loaded documents into the ChromaDB vector database.
+        Embed and store the loaded documents into the ChromaDB vector database in batches.
+        
+        Args:
+            batch_size (int): Number of documents to process in each batch. Default is 500.
+            refresh_interval (int): Number of batches before refreshing embeddings. Default is 4.
+            max_exceptions (int): Maximum number of exceptions before quitting. Default is 5.
+            start_index (int): Index to start processing from. Default is 0.
         """
+
+        def recursive_embed(documents, batch_size, refresh_interval, start_index=0, exception_count=0):
+            if exception_count >= max_exceptions:
+                print(f"Maximum exceptions ({max_exceptions}) reached. Quitting.")
+                print(f"Last processed batch: {start_index//batch_size}")
+                return
+            
+            refresh_counter = start_index // batch_size % refresh_interval
+            
+            try:
+                for i in range(start_index, len(documents), batch_size):
+                    batch = documents[i:i + batch_size]
+                    self.vectorstore.add_documents(batch)
+                    print(f"Processed batch {i//batch_size + 1}/{(len(documents)-1)//batch_size + 1}")
+                    sleep(5)
+
+                    refresh_counter += 1
+                    if refresh_counter >= refresh_interval:
+                        refresh_counter = 0
+                        print("Refreshing embeddings to manage resources...")
+                        self.refresh_embeddings()
+                        
+            except ReadError as e:
+                exception_count += 1
+                print(f"ReadError occurred at batch {i//batch_size + 1}")
+                print(f"Exception count: {exception_count}/{max_exceptions}")
+                print("Cooling down for 5 minutes before retrying...")
+                sleep(5*60)
+                self.refresh_embeddings()
+                print(f"Resuming from batch {i//batch_size + 1}...")
+                recursive_embed(documents, batch_size, refresh_interval, start_index=i, exception_count=exception_count)
 
         documents = self.load_chunked_documents()
-
         print(f"Embedding and storing {len(documents)} documents into ChromaDB...")
-        self.vectorstore.add_documents(documents)
+        recursive_embed(documents, batch_size, refresh_interval, start_index=start_index)
 
 
 if __name__ == "__main__":
@@ -101,5 +155,5 @@ if __name__ == "__main__":
         collection_name="perma_rag_collection"
     )
 
-    creator.embed_and_store()
+    creator.embed_and_store(start_index=54)
     print("ChromaDB creation complete.")
