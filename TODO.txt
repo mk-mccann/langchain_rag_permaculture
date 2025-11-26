@@ -1,3 +1,1 @@
-Add YAML frontmatter to each scraped document with url and license - DONE
-Chunk MD files - Done
-Vector embedding
+Vector embedding - figure out why LangChain and Mistral break during the embedding

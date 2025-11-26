@@ -7,4 +7,3 @@ data/
 src/__pycache_/
 tests/__pycache_
 tests/.pytest_cache
-_
