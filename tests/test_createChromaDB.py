@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 import json
 import tempfile
-from src.createChromaDB import createChromaDB
+from src.CreateChromaDB import CreateChromaDB
 
 @pytest.fixture
 def temp_dirs():
@@ -58,7 +58,7 @@ def test_load_chunked_documents(temp_dirs, mock_embeddings, sample_jsonl_file):
     chunked_dir, chroma_dir = temp_dirs
     jsonl_path, expected_data = sample_jsonl_file
     
-    creator = createChromaDB(
+    creator = CreateChromaDB(
         embeddings=mock_embeddings,
         chunked_docs_dir=chunked_dir,
         chroma_db_dir=chroma_dir,
@@ -89,7 +89,7 @@ def test_load_chunked_documents_filters_empty_content(temp_dirs, mock_embeddings
         for item in test_data:
             f.write(json.dumps(item) + '\n')
     
-    creator = createChromaDB(
+    creator = CreateChromaDB(
         embeddings=mock_embeddings,
         chunked_docs_dir=chunked_dir,
         chroma_db_dir=chroma_dir,
