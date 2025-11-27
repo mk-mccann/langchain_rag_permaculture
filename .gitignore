@@ -4,6 +4,6 @@
 .pytest_cache/
 chroma_db/
 data/
-src/__pycache_/
-tests/__pycache_
-tests/.pytest_cache
+logs/
+*/__pycache_/
+*/.pytest_cache
