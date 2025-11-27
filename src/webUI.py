@@ -90,9 +90,9 @@ def create_demo():
     with gr.Blocks(css=custom_css, title="RAG Agent Demo") as demo:
         
         gr.Markdown("""
-        # 🌱 RAG Agent Demo - Permaculture Knowledge Base
+        # 🌱 Permaculture RAG Agent Demo - Sustainable Development Knowledge Base
         
-        Ask questions about permaculture and get answers with source citations!
+        Ask questions about sustainable developmene and get answers with source citations!
         """)
         
         with gr.Tab("Chat"):
@@ -175,7 +175,7 @@ def create_demo():
             ### Technology Stack:
             - **LLM**: Mistral AI
             - **Vector Store**: ChromaDB
-            - **Framework**: LangChain + LangGraph
+            - **Framework**: LangChain
             - **UI**: Gradio
             """)
     
