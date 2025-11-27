@@ -285,6 +285,61 @@ class CreateChromaDB:
         recursive_embed(documents, batch_size, refresh_interval, start_index=start_index)
 
 
+    def retry_failed_batches(self, delay_seconds: float = 1):
+        """
+        Read the failed batches log and retry embedding only those ranges.
+        
+        Args:
+            delay_seconds (float): Seconds to wait between retries.
+        """
+        try:
+            with open(self.failed_batches_file, 'r') as f:
+                lines = f.readlines()
+        except FileNotFoundError:
+            print("No failed batches log found. Nothing to retry.")
+            return
+
+        failed_ranges = []
+        for line in lines:
+            if line.startswith("Batch ") and "indices " in line:
+                try:
+                    indices_part = line.split("indices ")[1].strip()
+                    start_str, end_str = indices_part.split("-")
+                    start_idx = int(start_str)
+                    end_idx = int(end_str)
+                    failed_ranges.append((start_idx, end_idx))
+                except Exception:
+                    continue
+
+        if not failed_ranges:
+            print("No failed batch ranges detected in the log.")
+            return
+
+        documents = self.load_chunked_documents()
+        total_batches = len(failed_ranges)
+        print(f"Retrying {total_batches} failed batches...")
+
+        for idx, (start_idx, end_idx) in enumerate(failed_ranges, start=1):
+            start_idx = max(0, start_idx)
+            end_idx = min(len(documents) - 1, end_idx)
+            if start_idx > end_idx:
+                print(f"Skipping invalid range {start_idx}-{end_idx}")
+                continue
+
+            batch = documents[start_idx:end_idx + 1]
+            print(f"Retrying failed batch {idx}/{total_batches} (indices {start_idx}-{end_idx})")
+
+            try:
+                self.add_batch_with_retry(batch)
+                self.save_checkpoint(end_idx + 1, len(documents), len(batch))
+                sleep(delay_seconds)
+            except Exception as e:
+                print(f"Retry failed for indices {start_idx}-{end_idx}: {e}")
+                self.log_failed_batch(-1, start_idx, end_idx, e)
+                sleep(5)
+
+        print("Failed batch retries complete.")
+
 
 if __name__ == "__main__":
     import os
