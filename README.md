@@ -1,5 +1,4 @@
-# Permaculture RAG - Chatbot for Permaculture, Regenerative Agriculture, and Sustainable Developent
-
+# Permaculture RAG 🌿 - Chatbot for Permaculture, Regenerative Agriculture, and Sustainable Developent
 
 ## Overview
 
