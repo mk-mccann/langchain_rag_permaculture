@@ -23,4 +23,7 @@ chromadb # Vector storage
 onnxruntime
 deepeval # Model evaluation
 gradio   # For building web UIs
-tqdm     # Progress bars
+alive-progress     # Progress bars
+sentence-transformers # For embeddings
+tiktoken # Token counting
+scikit-learn # ML utilities

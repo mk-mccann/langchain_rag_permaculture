@@ -18,7 +18,7 @@ All data sources are either open-source or usage permissions have been granted b
 
 ## Features
 
-- Context-aware responses using RAG architecture
+- Context-aware responses and source citations using RAG architecture
 - Knowledge base covering permaculture design, soil health, water management, and more
 - Conversational interface for exploring sustainable agriculture topics
 
