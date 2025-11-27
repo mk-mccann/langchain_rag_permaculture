@@ -3,7 +3,7 @@ import gradio as gr
 from pathlib import Path
 from dotenv import load_dotenv
 
-from RAGAgent import RAGAgent
+from RAGAgent import PermacultureRAGAgent
 
 
 # Load environment variables
@@ -11,7 +11,7 @@ load_dotenv()
 mistral_api_key = os.getenv("MISTRAL_API_KEY").strip()
 
 # Initialize the RAG agent
-agent = RAGAgent(
+agent = PermacultureRAGAgent(
     chroma_db_dir=Path("../chroma_db"),
     collection_name="permaculture_docs",
     model_name="mistral-small-latest",
