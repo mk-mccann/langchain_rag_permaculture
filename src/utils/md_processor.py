@@ -1,0 +1,748 @@
+"""
+Markdown File Processing Utilities
+
+This module provides functions for cleaning and processing markdown files,
+both individually and in batch (directory) mode. It combines functionality
+for removing unwanted files, cleaning boilerplate content, and updating
+frontmatter metadata.
+
+Functions:
+    - clean_single_file: Clean a single markdown file
+    - clean_directory: Batch process a directory of markdown files
+    - update_single_file_frontmatter: Update frontmatter for a single file
+    - update_directory_frontmatter: Batch update frontmatter for all files in directory
+    - process_single_file: Full processing pipeline for a single file
+    - process_directory: Full processing pipeline for a directory
+"""
+
+from pathlib import Path
+from typing import Optional, List, Dict, Set, Tuple, Any
+from alive_progress import alive_it
+
+
+# Configuration constants
+DISALLOWED_FILE_TYPES = [
+    '.png', '.jpg', '.jpeg', '.gif', '.pdf', 
+    '.docx', '.zip', '.fcstd', '.stl', '.kdenlive',
+    '.mp4', '.mp3', '.avi', '.mov', '.svg', '.skp',
+    '.exe', '.dmg', '.iso', '.tar', '.gz', '.rar', '.7z', '.csv',
+    '.xlsx', '.pptx', '.ini', '.sys', '.dll', '.dxf', '.odt', 
+    '.ods', '.odp', '.epub', '.mobi', '.dae', '.fbx', '.3ds',
+    '.ino', '.stp'
+]
+
+DISALLOWED_PAGE_TYPES = [
+    'File:', 'Schematic:', 'Category:', 'Special:', 
+    'Template:', 'one-community-welcomes'
+]
+
+BOILERPLATE_INDICATORS = [
+    "Navigation menu",
+    "Contribute to this page",
+    "###### WHO WE ARE",
+    "Retrieved from",
+]
+
+FRONTMATTER_KEY_ORDER = [
+    'source', 'title', 'author', 'url', 'access_date', 
+    'date', 'license', 'description', 'keywords'
+]
+
+
+# ============================================================================
+# SINGLE FILE OPERATIONS
+# ============================================================================
+
+def should_remove_file(file_path: Path) -> Tuple[bool, str]:
+    """
+    Determine if a file should be removed based on various criteria.
+    
+    Args:
+        file_path: Path to the file to check
+        
+    Returns:
+        Tuple of (should_remove: bool, reason: str)
+    """
+    # Check if empty
+    if file_path.stat().st_size == 0:
+        return True, "empty file"
+    
+    # Check disallowed page types
+    for page_type in DISALLOWED_PAGE_TYPES:
+        if page_type in file_path.name:
+            return True, f"disallowed page type: {page_type}"
+    
+    # Check file extensions and keywords
+    for file_type in DISALLOWED_FILE_TYPES:
+        if file_type in file_path.name.lower():
+            return True, f"disallowed file type: {file_type}"
+    
+    # Check tag files
+    if file_path.name[:3] == "tag":
+        return True, "tag file"
+    
+    return False, ""
+
+
+def remove_boilerplate(content: str) -> Tuple[str, bool]:
+    """
+    Remove boilerplate text from markdown content.
+    
+    Args:
+        content: The markdown content to clean
+        
+    Returns:
+        Tuple of (cleaned_content: str, was_modified: bool)
+    """
+    original_content = content
+    
+    for indicator in BOILERPLATE_INDICATORS:
+        index = content.find(indicator)
+        if index != -1:
+            content = content[:index].strip()
+    
+    return content, content != original_content
+
+
+def remove_duplicate_lines(content: str) -> Tuple[str, bool]:
+    """
+    Remove duplicate lines from markdown content.
+    
+    Args:
+        content: The markdown content to process
+        
+    Returns:
+        Tuple of (cleaned_content: str, was_modified: bool)
+    """
+    lines = content.splitlines()
+    unique_lines = []
+    seen = set()
+    
+    for line in lines:
+        stripped_line = line.strip()
+        if stripped_line not in seen:
+            unique_lines.append(line)
+            seen.add(stripped_line)
+    
+    cleaned_content = "\n".join(unique_lines)
+    return cleaned_content, cleaned_content != content
+
+
+def rename_wiki_file(file_path: Path) -> Optional[Path]:
+    """
+    Rename files that start with 'wiki' by removing the prefix.
+    
+    Args:
+        file_path: Path to the file to potentially rename
+        
+    Returns:
+        New path if renamed, None otherwise
+    """
+    if file_path.name.startswith("wiki"):
+        new_name = file_path.name[4:]
+        new_path = file_path.with_name(new_name)
+        file_path.rename(new_path)
+        return new_path
+    return None
+
+
+def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
+    """
+    Parse YAML frontmatter from markdown content.
+    
+    Args:
+        content: Markdown content with potential frontmatter
+        
+    Returns:
+        Tuple of (frontmatter_dict, body_content)
+    """
+    frontmatter_dict = {}
+    body = content
+    
+    if content.startswith('---'):
+        parts = content.split('---', 2)
+        
+        if len(parts) >= 3:
+            frontmatter = parts[1]
+            body = parts[2]
+            
+            lines = frontmatter.strip().split('\n')
+            
+            for line in lines:
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    # Clean up the value
+                    if not value:
+                        value = ""
+                    
+                    # Remove quotes
+                    if value.startswith('"') or value.startswith("'"):
+                        value = value[1:] 
+                    if value.endswith('"') or value.endswith("'"):
+                        value = value[:-1]
+                    
+                    # Replace colons in certain fields
+                    if key in ['title', 'description'] and ':' in value:
+                        value = value.replace(':', ' -')
+                    
+                    # Fix URL colons
+                    if key == 'url' and value.startswith('https -'):
+                        value = value.replace('https -', 'https:')
+                    
+                    frontmatter_dict[key] = value
+    
+    return frontmatter_dict, body
+
+
+def build_frontmatter(frontmatter_dict: Dict[str, str]) -> str:
+    """
+    Build YAML frontmatter string from dictionary.
+    
+    Args:
+        frontmatter_dict: Dictionary of frontmatter key-value pairs
+        
+    Returns:
+        Formatted frontmatter string
+    """
+    lines = []
+    
+    # Add keys in preferred order
+    for key in FRONTMATTER_KEY_ORDER:
+        if key in frontmatter_dict:
+            lines.append(f"{key}: {frontmatter_dict[key]}")
+    
+    # Add any remaining keys not in order
+    for key, value in frontmatter_dict.items():
+        if key not in FRONTMATTER_KEY_ORDER:
+            lines.append(f"{key}: {value}")
+    
+    return "\n".join(lines)
+
+
+def clean_single_file(
+    file_path: Path | str,
+    remove_boilerplate_text: bool = True,
+    remove_duplicates: bool = True,
+    rename_wiki: bool = True,
+    verbose: bool = False
+) -> Dict[str, Any]:
+    """
+    Clean a single markdown file.
+    
+    Args:
+        file_path: Path to the markdown file
+        remove_boilerplate_text: Whether to remove boilerplate content
+        remove_duplicates: Whether to remove duplicate lines
+        rename_wiki: Whether to rename files starting with 'wiki'
+        verbose: Print detailed information
+        
+    Returns:
+        Dictionary with processing results
+    """
+    file_path = Path(file_path)
+    results = {
+        'file': str(file_path),
+        'removed': False,
+        'reason': None,
+        'modified': False,
+        'changes': []
+    }
+    
+    if not file_path.exists():
+        results['error'] = 'File does not exist'
+        return results
+    
+    # Check if file should be removed
+    should_remove, reason = should_remove_file(file_path)
+    if should_remove:
+        if verbose:
+            print(f"Removing {file_path}: {reason}")
+        file_path.unlink()
+        results['removed'] = True
+        results['reason'] = reason
+        return results
+    
+    # Only process markdown files
+    if file_path.suffix != '.md':
+        results['skipped'] = True
+        results['reason'] = 'Not a markdown file'
+        return results
+    
+    # Read file content
+    try:
+        with file_path.open('r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        results['error'] = str(e)
+        return results
+    
+    original_content = content
+    
+    # Remove boilerplate
+    if remove_boilerplate_text:
+        content, modified = remove_boilerplate(content)
+        if modified:
+            results['changes'].append('removed_boilerplate')
+    
+    # Remove duplicate lines
+    if remove_duplicates:
+        content, modified = remove_duplicate_lines(content)
+        if modified:
+            results['changes'].append('removed_duplicates')
+    
+    # Write back if modified
+    if content != original_content:
+        try:
+            with file_path.open('w', encoding='utf-8') as f:
+                f.write(content)
+            results['modified'] = True
+            if verbose:
+                print(f"Cleaned {file_path}: {', '.join(results['changes'])}")
+        except Exception as e:
+            results['error'] = str(e)
+            return results
+    
+    # Rename if needed
+    if rename_wiki:
+        new_path = rename_wiki_file(file_path)
+        if new_path:
+            results['renamed'] = True
+            results['new_path'] = str(new_path)
+            results['changes'].append('renamed_wiki')
+            if verbose:
+                print(f"Renamed {file_path} to {new_path}")
+    
+    return results
+
+
+def update_single_file_frontmatter(
+    file_path: Path | str,
+    source: Optional[str] = None,
+    additional_metadata: Optional[Dict[str, str]] = None,
+    verbose: bool = False
+) -> Dict[str, Any]:
+    """
+    Update frontmatter for a single markdown file.
+    
+    Args:
+        file_path: Path to the markdown file
+        source: Source identifier (defaults to parent directory name)
+        additional_metadata: Additional key-value pairs to add to frontmatter
+        verbose: Print detailed information
+        
+    Returns:
+        Dictionary with processing results
+    """
+    file_path = Path(file_path)
+    results = {
+        'file': str(file_path),
+        'modified': False,
+        'added_fields': [],
+        'updated_fields': []
+    }
+    
+    if not file_path.exists():
+        results['error'] = 'File does not exist'
+        return results
+    
+    if file_path.suffix != '.md':
+        results['skipped'] = True
+        results['reason'] = 'Not a markdown file'
+        return results
+    
+    # Determine source
+    if source is None:
+        source = file_path.parent.name
+    
+    # Read file
+    try:
+        with file_path.open('r', encoding='utf-8') as f:
+            content = f.read()
+    except Exception as e:
+        results['error'] = str(e)
+        return results
+    
+    # Parse existing frontmatter
+    frontmatter_dict, body = parse_frontmatter(content)
+    
+    # Track what's new vs updated
+    if 'source' in frontmatter_dict:
+        if frontmatter_dict['source'] != source:
+            results['updated_fields'].append('source')
+    else:
+        results['added_fields'].append('source')
+    
+    # Update source
+    frontmatter_dict['source'] = source
+    
+    # Add additional metadata
+    if additional_metadata:
+        for key, value in additional_metadata.items():
+            if key in frontmatter_dict:
+                if frontmatter_dict[key] != value:
+                    results['updated_fields'].append(key)
+            else:
+                results['added_fields'].append(key)
+            frontmatter_dict[key] = value
+    
+    # Build new content
+    frontmatter_str = build_frontmatter(frontmatter_dict)
+    new_content = f"---\n{frontmatter_str}\n---{body}"
+    
+    # Write back
+    if new_content != content:
+        try:
+            with file_path.open('w', encoding='utf-8') as f:
+                f.write(new_content)
+            results['modified'] = True
+            if verbose:
+                print(f"Updated frontmatter for {file_path}")
+        except Exception as e:
+            results['error'] = str(e)
+            return results
+    
+    return results
+
+
+def process_single_file(
+    file_path: Path | str,
+    clean: bool = True,
+    update_frontmatter: bool = True,
+    source: Optional[str] = None,
+    verbose: bool = False
+) -> Dict[str, Any]:
+    """
+    Full processing pipeline for a single file (clean + update frontmatter).
+    
+    Args:
+        file_path: Path to the markdown file
+        clean: Whether to clean the file
+        update_frontmatter: Whether to update frontmatter
+        source: Source identifier for frontmatter
+        verbose: Print detailed information
+        
+    Returns:
+        Dictionary with combined processing results
+    """
+    file_path = Path(file_path)
+    results = {'file': str(file_path)}
+    
+    if clean:
+        clean_results = clean_single_file(file_path, verbose=verbose)
+        results["clean"] = clean_results
+        
+        # If file was removed, stop here
+        if clean_results.get('removed'):
+            return results
+        
+        # Update file_path if renamed
+        if clean_results.get('renamed'):
+            file_path = Path(clean_results['new_path'])
+    
+    if update_frontmatter and file_path.exists():
+        frontmatter_results = update_single_file_frontmatter(
+            file_path, source=source, verbose=verbose
+        )
+        results['frontmatter'] = frontmatter_results
+    
+    return results
+
+
+# ============================================================================
+# BATCH/DIRECTORY OPERATIONS
+# ============================================================================
+
+def clean_directory(
+    directory: Path | str,
+    recursive: bool = True,
+    remove_boilerplate_text: bool = True,
+    remove_duplicates: bool = True,
+    rename_wiki: bool = True,
+    verbose: bool = False,
+    show_progress: bool = True
+) -> Dict[str, Any]:
+    """
+    Clean all markdown files in a directory.
+    
+    Args:
+        directory: Path to directory to process
+        recursive: Process subdirectories recursively
+        remove_boilerplate_text: Whether to remove boilerplate content
+        remove_duplicates: Whether to remove duplicate lines
+        rename_wiki: Whether to rename wiki files
+        verbose: Print detailed information
+        show_progress: Show progress bar
+        
+    Returns:
+        Dictionary with summary statistics
+    """
+    dir_path = Path(directory)
+    
+    if not dir_path.exists():
+        return {'error': f'Directory {directory} does not exist'}
+    
+    stats = {
+        'total_files': 0,
+        'removed': 0,
+        'modified': 0,
+        'renamed': 0,
+        'skipped': 0,
+        'errors': 0
+    }
+    
+    # Collect all files
+    if recursive:
+        files = list(dir_path.glob('**/*'))
+    else:
+        files = list(dir_path.iterdir())
+    
+    files = [f for f in files if f.is_file()]
+    
+    # Process with or without progress bar
+    iterator = alive_it(files, title="Cleaning files") if show_progress else files
+    
+    for file_path in iterator:
+        stats['total_files'] += 1
+        
+        # Handle subdirectories if not recursive at file level
+        if file_path.is_dir() and not recursive:
+            continue
+        
+        result = clean_single_file(
+            file_path,
+            remove_boilerplate_text=remove_boilerplate_text,
+            remove_duplicates=remove_duplicates,
+            rename_wiki=rename_wiki,
+            verbose=verbose
+        )
+        
+        if result.get('removed'):
+            stats['removed'] += 1
+        elif result.get('modified'):
+            stats['modified'] += 1
+        if result.get('renamed'):
+            stats['renamed'] += 1
+        if result.get('skipped'):
+            stats['skipped'] += 1
+        if result.get('error'):
+            stats['errors'] += 1
+    
+    return stats
+
+
+def update_directory_frontmatter(
+    directory: Path | str,
+    recursive: bool = True,
+    source: Optional[str] = None,
+    use_parent_as_source: bool = True,
+    verbose: bool = False,
+    show_progress: bool = True
+) -> Dict[str, Any]:
+    """
+    Update frontmatter for all markdown files in a directory.
+    
+    Args:
+        directory: Path to directory to process
+        recursive: Process subdirectories recursively
+        source: Source identifier (if None and use_parent_as_source=True, uses parent dir)
+        use_parent_as_source: Use parent directory name as source if source not provided
+        verbose: Print detailed information
+        show_progress: Show progress bar
+        
+    Returns:
+        Dictionary with summary statistics
+    """
+    dir_path = Path(directory)
+    
+    if not dir_path.exists():
+        return {'error': f'Directory {directory} does not exist'}
+    
+    stats = {
+        'total_files': 0,
+        'modified': 0,
+        'skipped': 0,
+        'errors': 0
+    }
+    
+    # Collect markdown files
+    if recursive:
+        md_files = list(dir_path.glob('**/*.md'))
+    else:
+        md_files = list(dir_path.glob('*.md'))
+    
+    # Process with or without progress bar
+    iterator = alive_it(md_files, title="Updating frontmatter") if show_progress else md_files
+    
+    for file_path in iterator:
+        stats['total_files'] += 1
+        
+        # Determine source for this file
+        file_source = source
+        if file_source is None and use_parent_as_source:
+            file_source = file_path.parent.name
+        
+        result = update_single_file_frontmatter(
+            file_path,
+            source=file_source,
+            verbose=verbose
+        )
+        
+        if result.get('modified'):
+            stats['modified'] += 1
+        if result.get('skipped'):
+            stats['skipped'] += 1
+        if result.get('error'):
+            stats['errors'] += 1
+    
+    return stats
+
+
+def process_directory(
+    directory: Path | str,
+    recursive: bool = True,
+    clean: bool = True,
+    update_frontmatter: bool = True,
+    source: Optional[str] = None,
+    verbose: bool = False,
+    show_progress: bool = True
+) -> Dict[str, Any]:
+    """
+    Full processing pipeline for a directory (clean + update frontmatter).
+    
+    Args:
+        directory: Path to directory to process
+        recursive: Process subdirectories recursively
+        clean: Whether to clean files
+        update_frontmatter: Whether to update frontmatter
+        source: Source identifier for frontmatter
+        verbose: Print detailed information
+        show_progress: Show progress bar
+        
+    Returns:
+        Dictionary with combined summary statistics
+    """
+    results = {'directory': str(directory)}
+    
+    if clean:
+        if verbose:
+            print("Cleaning files...")
+        clean_stats = clean_directory(
+            directory,
+            recursive=recursive,
+            verbose=verbose,
+            show_progress=show_progress
+        )
+        results['clean'] = clean_stats
+    
+    if update_frontmatter:
+        if verbose:
+            print("Updating frontmatter...")
+        frontmatter_stats = update_directory_frontmatter(
+            directory,
+            recursive=recursive,
+            source=source,
+            verbose=verbose,
+            show_progress=show_progress
+        )
+        results['frontmatter'] = frontmatter_stats
+    
+    return results
+
+
+# ============================================================================
+# CONVENIENCE FUNCTIONS
+# ============================================================================
+
+def print_results(results: Dict[str, Any], operation: str = "Processing"):
+    """
+    Pretty print processing results.
+    
+    Args:
+        results: Results dictionary from processing functions
+        operation: Name of the operation for display
+    """
+    print(f"\n{operation} Results:")
+    print("=" * 60)
+    
+    if 'error' in results:
+        print(f"❌ Error: {results['error']}")
+        return
+    
+    # Handle single file results
+    if 'file' in results:
+        print(f"File: {results['file']}")
+        if results.get('removed'):
+            print(f"  ✓ Removed: {results.get('reason', 'N/A')}")
+        elif results.get('modified'):
+            print(f"  ✓ Modified: {', '.join(results.get('changes', []))}")
+        elif results.get('skipped'):
+            print(f"  ⊘ Skipped: {results.get('reason', 'N/A')}")
+    
+    # Handle directory results
+    if 'clean' in results:
+        clean = results['clean']
+        print("\nCleaning:")
+        print(f"  Total files: {clean.get('total_files', 0)}")
+        print(f"  Removed: {clean.get('removed', 0)}")
+        print(f"  Modified: {clean.get('modified', 0)}")
+        print(f"  Renamed: {clean.get('renamed', 0)}")
+        print(f"  Skipped: {clean.get('skipped', 0)}")
+        print(f"  Errors: {clean.get('errors', 0)}")
+    
+    if 'frontmatter' in results:
+        fm = results['frontmatter']
+        print("\nFrontmatter Updates:")
+        print(f"  Total files: {fm.get('total_files', 0)}")
+        print(f"  Modified: {fm.get('modified', 0)}")
+        print(f"  Skipped: {fm.get('skipped', 0)}")
+        print(f"  Errors: {fm.get('errors', 0)}")
+    
+    print("=" * 60)
+
+
+# ============================================================================
+# MAIN / EXAMPLES
+# ============================================================================
+
+if __name__ == "__main__":
+    import sys
+    
+    # Example usage
+    print("Markdown Processor Utility")
+    print("=" * 60)
+    
+    # Default directory
+    default_dir = Path("../../data/raw/scraped_pages")
+    
+    # Process based on command line args
+    if len(sys.argv) > 1:
+        target = Path(sys.argv[1])
+        
+        if target.is_file():
+            # Process single file
+            print(f"\nProcessing single file: {target}")
+            results = process_single_file(target, verbose=True)
+            print_results(results, "Single File Processing")
+        
+        elif target.is_dir():
+            # Process directory
+            print(f"\nProcessing directory: {target}")
+            results = process_directory(target, verbose=False, show_progress=True)
+            print_results(results, "Directory Processing")
+        
+        else:
+            print(f"Error: {target} does not exist")
+    
+    else:
+        # Default: process default directory
+        if default_dir.exists():
+            print(f"\nProcessing default directory: {default_dir}")
+            results = process_directory(default_dir, verbose=False, show_progress=True)
+            print_results(results, "Directory Processing")
+        else:
+            print(f"Default directory does not exist: {default_dir}")
+            print("\nUsage:")
+            print(f"  python {Path(__file__).name} <file_or_directory>")

@@ -23,6 +23,7 @@ def clean_directory(directory: Path | str = "data/raw/scraped_pages"):
         "Navigation menu",
         "Contribute to this page",
         "###### WHO WE ARE",
+        "Retrieved from",
     ]
     
     removed_count = 0
@@ -68,17 +69,29 @@ def clean_directory(directory: Path | str = "data/raw/scraped_pages"):
                     file.write(content)
                 cleaned_count += 1
 
+        # Remove duplicated lines in markdown files
+            lines = content.splitlines()
+            unique_lines = []
+            seen = set()
+            for line in lines:
+                # Strip leading/trailing whitespace for accurate comparison
+                line = line.strip()
+                if line not in seen:
+                    unique_lines.append(line)
+                    seen.add(line)
+            cleaned_content = "\n".join(unique_lines)
+
         # Rename files where the first 4 characters are 'wiki'
         if file_path.name.startswith("wiki"):
             new_name = file_path.name[4:]
             new_path = file_path.with_name(new_name)
             file_path.rename(new_path)
-        
+
     
     print(f"Removed {removed_count} file(s).")
     print(f"Cleaned boilerplate from {cleaned_count} markdown file(s).")
 
 
 if __name__ == "__main__":
-    clean_directory("../data/raw/scraped_pages")
+    clean_directory("../../data/raw/scraped_pages")
     print("Cleanup completed.")
