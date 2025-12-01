@@ -3,7 +3,7 @@ import gradio as gr
 from pathlib import Path
 from dotenv import load_dotenv
 
-from RAGAgent import RAGAgent
+from RAGAgent import RAGAgent, build_citation, format_citation_line
 
 
 # Load environment variables
@@ -41,53 +41,12 @@ def chat_with_agent(message, history, thread_id="default"):
         # Query the agent
         result = agent.query(message, thread_id=thread_id)
         
-        # Format sources for display
+        # Format sources for display using shared helpers
         sources_text = "**Sources:**\n\n"
         if result["sources"]:
             for source in result["sources"]:
-                sources_text += f"- **[Source {source['source_number']}]** "
-                if 'title' in source:
-                    sources_text += f"Title: {source['title']}, "
-
-                # Build a hierarchical header chain if available (H1 > H2 > H3 > H4)
-                header_order_primary = ['header_1', 'header_2', 'header_3', 'header_4']
-                header_order_alt = ['head_1', 'head_2', 'head_3', 'head_4']
-                header_values = []
-
-                # Collect primary header levels
-                for hk in header_order_primary:
-                    hv = source.get(hk)
-                    if isinstance(hv, str) and hv.strip():
-                        header_values.append(hv.strip())
-
-                # Fill gaps with alternative keys if primary missing
-                if not header_values:
-                    for hk in header_order_alt:
-                        hv = source.get(hk)
-                        if isinstance(hv, str) and hv.strip():
-                            header_values.append(hv.strip())
-
-                # If only a generic 'header' exists, include it
-                if not header_values:
-                    hv = source.get('header')
-                    if isinstance(hv, str) and hv.strip():
-                        header_values.append(hv.strip())
-
-                # Deduplicate while preserving order
-                seen_h = set()
-                header_values = [h for h in header_values if not (h in seen_h or seen_h.add(h))]
-
-                if header_values:
-                    if len(header_values) == 1:
-                        sources_text += f"Header: {header_values[0]}, "
-                    else:
-                        sources_text += f"Headers: {' > '.join(header_values)}, "
-
-                if 'url' in source:
-                    sources_text += f"URL: {source['url']}, "
-                if 'page' in source:
-                    sources_text += f"Page: {source['page']}, "
-                sources_text += "\n"
+                citation = build_citation(source, source['source_number'])
+                sources_text += f"{format_citation_line(citation)}\n "
         else:
             sources_text += "No sources retrieved."
         
@@ -134,13 +93,15 @@ def create_demo():
         # 🌱 RAGrarian - Sustainable Development Knowledge Base
         
         Ask questions about sustainable development and get answers with source citations!
+        
+        Use the Chat tab for interactive conversations, or the Query with Sources tab to see detailed references.
         """)
         
         with gr.Tab("Chat"):
             chatbot = gr.ChatInterface(
                 fn=chat_interface,
                 title="Chat with the RAGrarian",
-                description="Ask questions about permaculture. The agent will cite its sources.",
+                description="Ask questions about permaculture.",
                 examples=[
                     "What is permaculture?",
                     "What are the principles of permaculture?",

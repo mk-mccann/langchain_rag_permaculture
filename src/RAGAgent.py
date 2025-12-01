@@ -59,15 +59,15 @@ def build_citation(doc: Document, source_number: int) -> dict:
     source = md.get('source') or 'Unknown'
     title = md.get('title') or 'Unknown'
     header = format_header_chain(md)
-    url = md.get('url')
-    page = md.get('page')
+    url = md.get('url', None)
+    page = md.get('page', None)
     file_label = md.get('file_path') or md.get('path') or 'Unknown'
     file_path = md.get('file_path')
 
     citation_text = f"[Source {source_number}] (Source: {source}, Title: {title}, "
     if header:
         citation_text += f"Section: {header}, "
-    if url:
+    if url is not None:
         citation_text += f"URL: {url}, "
     if page is not None:
         citation_text += f"Page: {page}, "
