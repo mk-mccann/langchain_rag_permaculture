@@ -75,8 +75,8 @@ class HTML2MDScraper:
         meta_data = {}
 
         for meta in soup.find_all('meta'):
-            if meta.get('name'):
-                meta_data[meta['name']] = meta.get('content', '')
+            if meta.get('source'):
+                meta_data[meta['source']] = meta.get('content', '')
             elif meta.get('http-equiv'):
                 meta_data[f"http-equiv-{meta['http-equiv']}"] = meta.get('content', '')
 
@@ -86,9 +86,11 @@ class HTML2MDScraper:
         tags = self.extract_html_tags(soup)
 
         metadata = {
-            "url": str(url),
-            "access_date": time.strftime("%Y-%m-%d"),
+            "source": str(config.get("source", "")),
             "title": str(soup.title.string) if soup.title else "",
+            "author": str(tags.get("author", "")),
+            "url": str(url),
+            "access_date": str(time.strftime("%Y-%m-%d")),
             "license": str(config.get("license", "")),
             "description": str(tags.get("description", ""))
         }
@@ -107,8 +109,8 @@ class HTML2MDScraper:
             response = requests.get(url, timeout=5)
             response.raise_for_status()
 
-            page_name = f"{urlparse(url).path.replace('/', '') or 'index'}.md"
-            page_save_path =  save_dir / page_name
+            page_source = f"{urlparse(url).path.replace('/', '') or 'index'}.md"
+            page_save_path =  save_dir / page_source
 
             if page_save_path.exists():
                 print(f"Already scraped. Skipping: {url}")
@@ -195,13 +197,13 @@ class HTML2MDScraper:
         config = self.load_json_config(config_file)
 
         for cfg in config:
-            site_name = cfg['name']
+            site_source = cfg['source']
             base_url = cfg['url']
 
-            output_dir = self.base_output_dir / site_name.replace(" ", "_")
+            output_dir = self.base_output_dir / site_source.replace(" ", "_")
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            print(f"\nCrawling {site_name} ({base_url})")
+            print(f"\nCrawling {site_source} ({base_url})")
             self.crawl_site(cfg, output_dir)
 
             print(f"\nScraped {len(self.visited_urls)} pages to {output_dir}/")
@@ -210,7 +212,7 @@ class HTML2MDScraper:
         print("\nScraping completed.")
 
 
-if __name__ == "__main__":
+if __source__ == "__main__":
     input_file = Path("../config/urls.json")
     base_output_dir = Path("../data/raw/scraped_pages")
 

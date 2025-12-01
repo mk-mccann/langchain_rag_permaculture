@@ -115,7 +115,17 @@ class MarkdownChunkerWithKeywordExtraction:
             yaml_content = match.group(1)
 
             try:
+                # Parse YAML with custom date handling
                 frontmatter = yaml.safe_load(yaml_content)
+
+                # Convert any date objects to ISO format strings for JSON serialization
+                if frontmatter:
+                    for key, value in frontmatter.items():
+                        if key in ['access_date', 'date']:
+                            frontmatter[key] = str(value)
+                        if isinstance(value, str):
+                            # Preserve special characters as strings
+                            frontmatter[key] = value.encode('utf-8').decode('unicode_escape')
                 # Remove frontmatter from content
                 content = markdown_content[match.end():]
                 return frontmatter or {}, content
@@ -239,6 +249,7 @@ class MarkdownChunkerWithKeywordExtraction:
 
         with open(output_path, 'w', encoding='utf-8') as f:
             for doc in documents:
+
                 doc_dict = {
                     'page_content': doc.page_content,
                     'metadata': doc.metadata
@@ -366,21 +377,6 @@ class MarkdownChunkerWithKeywordExtraction:
         return all_documents
     
 
-    # def load_all_cached_documents(self) -> List[Document]:
-    #     """Load all cached documents for building vector database."""
-
-    #     all_documents = []
-        
-    #     for file_info in self.processed_files.values():
-    #         cache_file = file_info['cache_file']
-    #         documents = self.load_documents_jsonl(cache_file)
-    #         all_documents.extend(documents)
-        
-    #     print(f"Loaded {len(all_documents)} total cached documents")
-
-    #     return all_documents
-
-
 
 if __name__ == "__main__":
     import argparse
@@ -401,12 +397,9 @@ if __name__ == "__main__":
         num_keywords=5,
         use_maxsum=False,
         use_mmr=False,
-        cache_dir=directory_path.parent / "chunked_documents"
+        cache_dir=directory_path.parents[1] / "chunked_documents"
     )
     
     documents = chunker.process_directory(directory_path, extract_keywords=True)
     
     print(f"Total documents created: {len(documents)}")
-    # for doc in documents[:5]:  # Print first 5 documents as a sample
-    #     print(f"Metadata: {doc.metadata}")
-    #     print(f"Content Preview: {doc.page_content[:100]}...\n")
