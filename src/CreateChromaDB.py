@@ -109,17 +109,13 @@ class CreateChromaDB:
             cache_file = str(rel_path)
             current_files.add(cache_file)
             
-            # Find this file in the index
             file_in_index = False
             for key, value in index.items():
                 if value.get('cache_file') == cache_file:
                     file_in_index = True
-                    # Check if hash has changed
                     stored_hash = value.get('hash')
                     if stored_hash:
-                        # For now, we'll consider all files as potentially modified
-                        # since we don't have direct access to source file hashes
-                        # This could be enhanced by computing hashes of JSONL files
+                        # TODO: compute and compare JSONL/source file hashes to detect changes
                         pass
                     break
             
@@ -305,31 +301,40 @@ class CreateChromaDB:
         modified_source_files = set()
         
         if incremental:
-            print("Checking for new and modified files...")
-            new_files, modified_files = self.get_modified_and_new_files()
-            
-            if not new_files and not modified_files:
-                print("No new or modified files found. Database is up to date.")
-                return
-            
-            print(f"Found {len(new_files)} new files and {len(modified_files)} modified files.")
-            
-            # Combine new and modified files
-            file_filter = new_files.union(modified_files)
-            
-            # For modified files, we need to remove old embeddings first
-            if modified_files:
-                # Extract source file paths from index
-                index = self.load_index()
-                for key, value in index.items():
-                    cache_file = value.get('cache_file', '')
-                    if cache_file in modified_files:
-                        source_file = value.get('file_path', '')
-                        if source_file:
-                            modified_source_files.add(source_file)
+            # Check that index file exists
+            index = self.load_index()
+
+            if not index:
+                print("Index file missing or empty. Performing full rebuild.")
+                incremental = False
+                del index
+
+            else:
+                print("Checking for new and modified files...")
+                new_files, modified_files = self.get_modified_and_new_files()
                 
-                # Remove old embeddings for modified files
-                self.remove_documents_by_source(modified_source_files)
+                if not new_files and not modified_files:
+                    print("No new or modified files found. Database is up to date.")
+                    return
+                
+                print(f"Found {len(new_files)} new files and {len(modified_files)} modified files.")
+                
+                # Combine new and modified files
+                file_filter = new_files.union(modified_files)
+                
+                # For modified files, we need to remove old embeddings first
+                if modified_files:
+                    # Extract source file paths from index
+                    index = self.load_index()
+                    for key, value in index.items():
+                        cache_file = value.get('cache_file', '')
+                        if cache_file in modified_files:
+                            source_file = value.get('file_path', '')
+                            if source_file:
+                                modified_source_files.add(source_file)
+                    
+                    # Remove old embeddings for modified files
+                    self.remove_documents_by_source(modified_source_files)
         
         # Load documents (filtered if incremental)
         documents = self.load_chunked_documents(file_filter=file_filter)
@@ -540,7 +545,7 @@ if __name__ == "__main__":
     
     # Or use the legacy method if preferred
     # creator.embed_and_store_legacy(start_index=0)
-
+ 
     # Retry failed batches if needed
     creator.retry_failed_batches()
     
