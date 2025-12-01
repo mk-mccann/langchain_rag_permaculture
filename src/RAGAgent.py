@@ -14,6 +14,92 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.runtime import Runtime
 
 
+# ---------------------------------------------------------------------------
+# Shared citation formatting helpers (reusable across chat/query/UI)
+# ---------------------------------------------------------------------------
+def format_header_chain(metadata: dict) -> str | None:
+    """Build a hierarchical header chain H1 > H2 > H3 > H4 from metadata.
+
+    Falls back to common variants (head_*) and a generic 'header' field.
+    Returns None if nothing present.
+    """
+    levels_primary = ['header_1', 'header_2', 'header_3', 'header_4']
+    levels_alt = ['head_1', 'head_2', 'head_3', 'head_4']
+    vals: list[str] = []
+
+    for k in levels_primary:
+        v = metadata.get(k)
+        if isinstance(v, str) and v.strip():
+            vals.append(v.strip())
+    if not vals:
+        for k in levels_alt:
+            v = metadata.get(k)
+            if isinstance(v, str) and v.strip():
+                vals.append(v.strip())
+    if not vals:
+        v = metadata.get('header')
+        if isinstance(v, str) and v.strip():
+            vals.append(v.strip())
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    vals = [h for h in vals if not (h in seen or seen.add(h))]
+    if not vals:
+        return None
+    return " > ".join(vals) if len(vals) > 1 else vals[0]
+
+
+def build_citation(doc: Document, source_number: int) -> dict:
+    """Create a structured citation dict from a Document for consistent use.
+
+    Returns keys commonly used by the UI and logs:
+    - source_number, title, header, url, page, file, file_path, metadata, citation_text
+    """
+    md = doc.metadata if hasattr(doc, 'metadata') and isinstance(doc.metadata, dict) else {}
+    source = md.get('source') or 'Unknown'
+    title = md.get('title') or 'Unknown'
+    header = format_header_chain(md)
+    url = md.get('url')
+    page = md.get('page')
+    file_label = md.get('file_path') or md.get('path') or 'Unknown'
+    file_path = md.get('file_path')
+
+    citation_text = f"[Source {source_number}] (Source: {source}, Title: {title}, "
+    if header:
+        citation_text += f"Section: {header}, "
+    if url:
+        citation_text += f"URL: {url}, "
+    if page is not None:
+        citation_text += f"Page: {page}, "
+
+    # Trim any trailing comma + space and close paren
+    citation_text = citation_text.rstrip(', ') + ")"
+
+    return {
+        "source_number": source_number,
+        "source": source,
+        "title": title,
+        "header": header,
+        "url": url,
+        "page": page,
+        "file": file_label,
+        "file_path": file_path,
+        "metadata": md,
+        "citation_text": citation_text,
+    }
+
+
+def format_citation_line(citation: dict, include_content: str | None = None) -> str:
+    """Render a single citation line (optionally followed by content).
+
+    include_content: if provided, appended after the citation line separated by newline.
+    """
+    base = citation.get("citation_text") or ""
+    if include_content:
+        return f"{base}\n{include_content}"
+    return base
+
+
 class CustomAgentState(AgentState):  
     user_id: str
     preferences: dict
@@ -29,6 +115,7 @@ class RetrieveDocumentsMiddleware(AgentMiddleware[CustomAgentState]):
         self.k_documents = k_documents
 
 
+    # Use shared header formatting helpers defined above
     def before_model(self, state: CustomAgentState) -> dict[str, Any] | None:
 
         last_message = state["messages"][-1]
@@ -37,18 +124,12 @@ class RetrieveDocumentsMiddleware(AgentMiddleware[CustomAgentState]):
             k=self.k_documents
         )
 
-        # Format context with numbered sources for citation
+        # Format context with numbered sources for citation using shared helpers
         docs_content_with_citations = []
-
         for idx, doc in enumerate(retrieved_docs, 1):
-            # Extract metadata for citation
-            title = doc.metadata.get('title', 'Unknown')
-            header = doc.metadata.get('header_2', 'N/A')
-            url = doc.metadata.get('url', 'N/A')
-            page = doc.metadata.get('page', 'N/A')
-            
+            citation = build_citation(doc, idx)
             docs_content_with_citations.append(
-                f"[Source {idx}] (File: {title}, Section: {header}, URL: {url}, Page: {page})\n{doc.page_content}"
+                format_citation_line(citation, include_content=doc.page_content)
             )
         
         docs_content = "\n\n".join(docs_content_with_citations)
@@ -60,8 +141,11 @@ class RetrieveDocumentsMiddleware(AgentMiddleware[CustomAgentState]):
             f"{docs_content}"
         )
         
+        # Provide retrieved docs under both "context" (matches state_schema)
+        # and "sources" (for downstream consumers expecting that key)
         return {
             "messages": [last_message.model_copy(update={"content": augmented_message_content})],
+            "context": retrieved_docs,
             "sources": retrieved_docs,
         }
 
@@ -101,12 +185,12 @@ class RetrieveDocumentsMiddleware(AgentMiddleware[CustomAgentState]):
 #         return {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)]}  
 
 
-class PermacultureRAGAgent:
+class RAGAgent:
 
     def __init__(self,
         chroma_db_dir: Path | str,
-        collection_source: str,
-        model_source: str = "mistral-large-latest",
+        collection_name: str,
+        model_name: str = "mistral-large-latest",
         embeddings_model: str = "mistral-embed",
         temperature: float = 0.7,
         max_tokens: int = 1024,
@@ -118,8 +202,8 @@ class PermacultureRAGAgent:
         
         Args:
             chroma_db_dir (Path | str): Directory containing the ChromaDB database.
-            collection_source (str): source of the ChromaDB collection.
-            model_source (str): Mistral model to use for chat.
+            collection_name (str): name of the ChromaDB collection.
+            model_name (str): Mistral model to use for chat.
             embeddings_model (str): Model to use for embeddings.
             temperature (float): Temperature for response generation.
             max_tokens (int): Maximum tokens in response.
@@ -127,7 +211,7 @@ class PermacultureRAGAgent:
         """
         
         self.chroma_db_dir = Path(chroma_db_dir)
-        self.collection_source = collection_source
+        self.collection_name= collection_name
         self.k_documents = k_documents
         
         # Initialize embeddings
@@ -135,14 +219,14 @@ class PermacultureRAGAgent:
         
         # Initialize vectorstore
         self.vectorstore = Chroma(
-            collection_source=collection_source,
+            collection_name=collection_name,
             embedding_function=self.embeddings,
             persist_directory=str(chroma_db_dir)
         )
         
         # Initialize chat model
         self.model = ChatMistralAI(
-            model_source=model_source,
+            model_name=model_name,
             temperature=temperature,
             max_tokens=max_tokens
         )
@@ -175,10 +259,7 @@ class PermacultureRAGAgent:
 
         print("RAG Agent Chat Interface")
         print("Type 'quit', 'exit', or 'q' to end the conversation")
-        print("Type 'sources' to see the sources from the last response")
         print("-" * 50)
-        
-        last_context = []
         
         while True:
             try:
@@ -192,9 +273,8 @@ class PermacultureRAGAgent:
                     if last_context:
                         print("\nSources from last response:")
                         for idx, doc in enumerate(last_context, 1):
-                            source = doc.metadata.get('source', 'Unknown')
-                            page = doc.metadata.get('page', 'N/A')
-                            print(f"  [Source {idx}] File: {source}, Page: {page}")
+                            citation = build_citation(doc, idx)
+                            print(f"{format_citation_line(citation)}")
                     else:
                         print("No sources available yet. Ask a question first!")
                     continue
@@ -252,45 +332,20 @@ class PermacultureRAGAgent:
         # Extract answer and sources
         answer = result["messages"][-1].content
         sources = []
-        
-        if "context" in result:
-            for idx, doc in enumerate(result["context"], 1):
-                sources.append({
-                    "source_number": idx,
-                    "file": doc.metadata.get('source', 'Unknown'),
-                    "url": doc.metadata.get('url', 'N/A'),
-                    "page": doc.metadata.get('page', 'N/A'),
-                    "metadata": doc.metadata
-                })
+
+        # Prefer 'context' (aligned with state schema) but fall back to 'sources'
+        retrieved = result.get("context") or result.get("sources") or []
+
+        for idx, doc in enumerate(retrieved, 1):
+            citation = build_citation(doc, idx)
+            # Expose a consistent, enriched source dict to callers
+            sources.append(citation)
         
         return {
             "answer": answer,
             "sources": sources
         }
-
-    @tool(response_format="content_and_artifact")
-    def retrieve_context(self, query: str):
-        """Retrieve information to help answer a query."""
-        retrieved_docs = self.vectorstore.similarity_search(query, k=self.k_documents)
-        serialized = "\n\n".join(
-            (f"Source: {doc.metadata}\nContent: {doc.page_content}")
-            for doc in retrieved_docs
-        )
-        return serialized, retrieved_docs
     
-
-    def _test_query_retrieve_context(self):
-        query = (
-            "What is permaculture?\n\n"
-            "Once you get the answer, look up common extensions of that method."
-        )
-
-        for event in self.agent.stream(
-            {"messages": [{"role": "user", "content": query}]},
-            stream_mode="values",
-        ):
-            event["messages"][-1].pretty_print()
-
 
     def _test_query_prompt_with_context(self):
         query = (
@@ -312,7 +367,7 @@ class PermacultureRAGAgent:
 
     def _test_query_with_sources(self):
         """Test query that shows citations."""
-        query = "What is permaculture?"
+        query = "What are the principles of permaculture?"
         
         print("Question:", query)
         print("\n" + "="*50 + "\n")
@@ -328,17 +383,17 @@ class PermacultureRAGAgent:
 
 
 
-if __source__ == "__main__":
+if __name__ == "__main__":
     import os
     from dotenv import load_dotenv
 
     load_dotenv()
     mistral_api_key = os.getenv("MISTRAL_API_KEY").strip()
 
-    agent = PermacultureRAGAgent(
+    agent = RAGAgent(
         chroma_db_dir = Path("../chroma_db"),
-        collection_source = "permaculture_docs",
-        model_source = "mistral-small-latest",
+        collection_name = "perma_rag_collection",
+        model_name = "mistral-small-latest",
         embeddings_model = "mistral-embed",
     )
     

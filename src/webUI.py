@@ -3,7 +3,7 @@ import gradio as gr
 from pathlib import Path
 from dotenv import load_dotenv
 
-from PermacultureRAGAgent import PermacultureRAGAgent
+from RAGAgent import RAGAgent
 
 
 # Load environment variables
@@ -11,10 +11,10 @@ load_dotenv()
 mistral_api_key = os.getenv("MISTRAL_API_KEY").strip()
 
 # Initialize the RAG agent
-agent = PermacultureRAGAgent(
+agent = RAGAgent(
     chroma_db_dir=Path("../chroma_db"),
-    collection_source="perma_rag_collection",
-    model_source="mistral-small-latest",
+    collection_name="perma_rag_collection",
+    model_name="mistral-small-latest",
     embeddings_model="mistral-embed",
 )
 
@@ -47,11 +47,44 @@ def chat_with_agent(message, history, thread_id="default"):
             for source in result["sources"]:
                 sources_text += f"- **[Source {source['source_number']}]** "
                 if 'title' in source:
-                    sources_text += f"Title: {source['title']},  "
-                if 'header_2' in source:
-                    sources_text += f"Header: {source['header_2']}, "
+                    sources_text += f"Title: {source['title']}, "
+
+                # Build a hierarchical header chain if available (H1 > H2 > H3 > H4)
+                header_order_primary = ['header_1', 'header_2', 'header_3', 'header_4']
+                header_order_alt = ['head_1', 'head_2', 'head_3', 'head_4']
+                header_values = []
+
+                # Collect primary header levels
+                for hk in header_order_primary:
+                    hv = source.get(hk)
+                    if isinstance(hv, str) and hv.strip():
+                        header_values.append(hv.strip())
+
+                # Fill gaps with alternative keys if primary missing
+                if not header_values:
+                    for hk in header_order_alt:
+                        hv = source.get(hk)
+                        if isinstance(hv, str) and hv.strip():
+                            header_values.append(hv.strip())
+
+                # If only a generic 'header' exists, include it
+                if not header_values:
+                    hv = source.get('header')
+                    if isinstance(hv, str) and hv.strip():
+                        header_values.append(hv.strip())
+
+                # Deduplicate while preserving order
+                seen_h = set()
+                header_values = [h for h in header_values if not (h in seen_h or seen_h.add(h))]
+
+                if header_values:
+                    if len(header_values) == 1:
+                        sources_text += f"Header: {header_values[0]}, "
+                    else:
+                        sources_text += f"Headers: {' > '.join(header_values)}, "
+
                 if 'url' in source:
-                    sources_text += f"URL: {source['url']}), "
+                    sources_text += f"URL: {source['url']}, "
                 if 'page' in source:
                     sources_text += f"Page: {source['page']}, "
                 sources_text += "\n"
@@ -98,15 +131,15 @@ def create_demo():
     with gr.Blocks(css=custom_css, title="RAG Agent Demo") as demo:
         
         gr.Markdown("""
-        # 🌱 Permaculture RAG Agent Demo - Sustainable Development Knowledge Base
+        # 🌱 RAGrarian - Sustainable Development Knowledge Base
         
-        Ask questions about sustainable developmene and get answers with source citations!
+        Ask questions about sustainable development and get answers with source citations!
         """)
         
         with gr.Tab("Chat"):
             chatbot = gr.ChatInterface(
                 fn=chat_interface,
-                title="Chat with the Agent",
+                title="Chat with the RAGrarian",
                 description="Ask questions about permaculture. The agent will cite its sources.",
                 examples=[
                     "What is permaculture?",
@@ -164,7 +197,7 @@ def create_demo():
         
         with gr.Tab("About"):
             gr.Markdown("""
-            ## About this Demo
+            ## About the RAGrarian
             
             This is a Retrieval-Augmented Generation (RAG) agent that answers questions about permaculture.
             
@@ -185,16 +218,21 @@ def create_demo():
             - **Vector Store**: ChromaDB
             - **Framework**: LangChain
             - **UI**: Gradio
+
+            ### Developed by:           
+            Matt McCann (c) 2025
+            [GitHub](www.mk-mccann.github.io) | [LinkedIn](https://linkedin.com/in/matt-k-mccann/)
             """)
+            
     
     return demo
 
 
-if __source__ == "__main__":
+if __name__ == "__main__":
     demo = create_demo()
     demo.launch(
         share=False,  # Set to True to create a public link
-        server_source="127.0.0.1",
+        server_name="127.0.0.1",
         server_port=7860,
         show_error=True
     )
