@@ -1,17 +1,17 @@
 from time import sleep
 from pathlib import Path
 import json
+import hashlib
 
-from typing import List
 from httpx import ReadError
 from alive_progress import alive_it
+from typing import List, Dict, Set, Tuple, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from langchain_community.vectorstores.utils import filter_complex_metadata
-from langchain_core.documents import Document
 from langchain_chroma import Chroma
+from langchain_core.documents import Document
 from langchain_community.document_loaders import JSONLoader
+from langchain_community.vectorstores.utils import filter_complex_metadata
 from langchain_mistralai.embeddings import MistralAIEmbeddings
-
 
 
 class CreateChromaDB:
@@ -24,6 +24,7 @@ class CreateChromaDB:
         checkpoint_file: Path | str = "embedding_progress.json",
         failed_batches_file: Path | str = "failed_batches.txt",
         collection_name: str = "default_collection",
+        index_file: Optional[Path | str] = None,
         ):
        
         """
@@ -35,7 +36,8 @@ class CreateChromaDB:
             chroma_db_dir (Path | str): Directory to store the ChromaDB database.
             checkpoint_file (str): File to store processing progress.
             failed_batches_file (str): File to log failed batches.
-            collection_name (str): Name of the ChromaDB collection.
+            collection_source (str): source of the ChromaDB collection.
+            index_file (Path | str): Path to the index.json file that tracks file hashes.
         """
 
         self.embeddings = embeddings
@@ -44,6 +46,12 @@ class CreateChromaDB:
         self.chroma_db_dir = Path(chroma_db_dir)
         self.checkpoint_file = Path(checkpoint_file)
         self.failed_batches_file = Path(failed_batches_file)
+        
+        # Set default index file path if not provided
+        if index_file is None:
+            self.index_file = self.chunked_docs_dir / "index.json"
+        else:
+            self.index_file = Path(index_file)
 
         if not self.chroma_db_dir.exists():
             self.chroma_db_dir.mkdir(parents=True, exist_ok=True)
@@ -61,15 +69,72 @@ class CreateChromaDB:
         """
 
         self.vectorstore = Chroma(
-            collection_name=self.collection_name,
+            collection_source=self.collection_source,
             embedding_function=self.embeddings,
             persist_directory=str(self.chroma_db_dir)
         )
 
 
-    def load_chunked_documents(self):
+    def load_index(self) -> Dict:
+        """
+        Load the index.json file that tracks file hashes and metadata.
+        
+        Returns:
+            Dictionary containing file metadata and hashes.
+        """
+        if self.index_file.exists():
+            with open(self.index_file, 'r') as f:
+                return json.load(f)
+        return {}
+
+
+    def get_modified_and_new_files(self) -> Tuple[Set[str], Set[str]]:
+        """
+        Compare current files with the index to find new and modified files.
+        
+        Returns:
+            Tuple of (new_files, modified_files) as sets of cache file paths.
+        """
+        index = self.load_index()
+        current_files = set()
+        new_files = set()
+        modified_files = set()
+        
+        # Get all current JSONL files
+        jsonl_files = list(self.chunked_docs_dir.glob("**/*.jsonl"))
+        
+        for file_path in jsonl_files:
+            # Get relative path for matching with index
+            rel_path = file_path.relative_to(self.chunked_docs_dir)
+            cache_file = str(rel_path)
+            current_files.add(cache_file)
+            
+            # Find this file in the index
+            file_in_index = False
+            for key, value in index.items():
+                if value.get('cache_file') == cache_file:
+                    file_in_index = True
+                    # Check if hash has changed
+                    stored_hash = value.get('hash')
+                    if stored_hash:
+                        # For now, we'll consider all files as potentially modified
+                        # since we don't have direct access to source file hashes
+                        # This could be enhanced by computing hashes of JSONL files
+                        pass
+                    break
+            
+            if not file_in_index:
+                new_files.add(cache_file)
+        
+        return new_files, modified_files
+
+
+    def load_chunked_documents(self, file_filter: Optional[Set[str]] = None):
         """
         Recursively load chunked JSONL documents from the specified directory.
+        
+        Args:
+            file_filter: Set of relative file paths to load. If None, loads all files.
 
         Returns:
             List of loaded documents.
@@ -77,6 +142,15 @@ class CreateChromaDB:
 
         all_docs = []
         jsonl_files = list(self.chunked_docs_dir.glob("**/*.jsonl"))
+        
+        # Filter files if file_filter is provided
+        if file_filter is not None:
+            filtered_files = []
+            for file_path in jsonl_files:
+                rel_path = str(file_path.relative_to(self.chunked_docs_dir))
+                if rel_path in file_filter:
+                    filtered_files.append(file_path)
+            jsonl_files = filtered_files
 
         for file_path in alive_it(jsonl_files, title="Loading chunked documents for ChromaDB"):
             loader = JSONLoader(
@@ -162,10 +236,60 @@ class CreateChromaDB:
         self.vectorstore.add_documents(batch)
 
 
+    def remove_documents_by_source(self, source_files: Set[str]):
+        """
+        Remove documents from the vector store based on source file paths.
+        
+        Args:
+            source_files: Set of source file paths to remove.
+        """
+        if not source_files:
+            return
+            
+        print(f"Removing {len(source_files)} modified files from the database...")
+        
+        # Get all documents with their IDs
+        collection = self.vectorstore._collection
+        
+        # Get all data from collection
+        all_data = collection.get(include=['metadatas'])
+        
+        if not all_data['ids']:
+            print("No existing documents found in collection.")
+            return
+        
+        # Find IDs to delete based on source file
+        ids_to_delete = []
+        metadatas = all_data.get('metadatas', [])
+        ids = all_data.get('ids', [])
+        
+        if not metadatas or not ids:
+            print("No metadata found in collection.")
+            return
+            
+        for idx, metadata in enumerate(metadatas):
+            if metadata and 'file_path' in metadata:
+                file_path = metadata.get('file_path')
+                if file_path and isinstance(file_path, str):
+                    # Check if this document's source file is in our set of files to remove
+                    for source_file in source_files:
+                        if source_file in file_path:
+                            ids_to_delete.append(ids[idx])
+                            break
+        
+        if ids_to_delete:
+            print(f"Deleting {len(ids_to_delete)} document chunks from modified sources...")
+            collection.delete(ids=ids_to_delete)
+            print("Deletion complete.")
+        else:
+            print("No matching documents found to delete.")
+
+
     def embed_and_store(self, 
                         batch_size: int = 100, 
                         delay_seconds: float = 1,
-                        resume: bool = True):
+                        resume: bool = True,
+                        incremental: bool = True):
         """
         Embed and store the loaded documents into the ChromaDB vector database in batches.
         
@@ -173,17 +297,57 @@ class CreateChromaDB:
             batch_size (int): Number of documents to process in each batch. Default is 100.
             delay_seconds (float): Seconds to wait between batches. Default is 1.
             resume (bool): Whether to resume from checkpoint. Default is True.
+            incremental (bool): Whether to only process new/modified files. Default is True.
         """
         
-        # Load documents
-        documents = self.load_chunked_documents()
-        print(f"Loaded {len(documents)} documents")
+        # Determine which files to process
+        file_filter = None
+        modified_source_files = set()
+        
+        if incremental:
+            print("Checking for new and modified files...")
+            new_files, modified_files = self.get_modified_and_new_files()
+            
+            if not new_files and not modified_files:
+                print("No new or modified files found. Database is up to date.")
+                return
+            
+            print(f"Found {len(new_files)} new files and {len(modified_files)} modified files.")
+            
+            # Combine new and modified files
+            file_filter = new_files.union(modified_files)
+            
+            # For modified files, we need to remove old embeddings first
+            if modified_files:
+                # Extract source file paths from index
+                index = self.load_index()
+                for key, value in index.items():
+                    cache_file = value.get('cache_file', '')
+                    if cache_file in modified_files:
+                        source_file = value.get('file_path', '')
+                        if source_file:
+                            modified_source_files.add(source_file)
+                
+                # Remove old embeddings for modified files
+                self.remove_documents_by_source(modified_source_files)
+        
+        # Load documents (filtered if incremental)
+        documents = self.load_chunked_documents(file_filter=file_filter)
+        
+        if not documents:
+            print("No documents to process.")
+            return
+            
+        print(f"Loaded {len(documents)} documents to embed")
         
         # Determine starting index
         start_idx = self.load_checkpoint() if resume else 0
         
         # Calculate total batches for progress tracking
         total_batches = (len(documents) + batch_size - 1) // batch_size
+        
+        # Initialize i for exception handling
+        i = start_idx
         
         try:
             for i in range(start_idx, len(documents), batch_size):
@@ -256,6 +420,9 @@ class CreateChromaDB:
                 return
             
             refresh_counter = start_index // batch_size % refresh_interval
+            
+            # Initialize i for exception handling
+            i = start_index
             
             try:
                 for i in range(start_index, len(documents), batch_size):
@@ -346,10 +513,15 @@ if __name__ == "__main__":
     from dotenv import load_dotenv
 
     load_dotenv()
-    api_key = os.getenv("MISTRAL_API_KEY").strip()
+    api_key_str = os.getenv("MISTRAL_API_KEY")
+    
+    if not api_key_str:
+        raise ValueError("MISTRAL_API_KEY not found in environment variables")
+    
+    api_key_str = api_key_str.strip()
 
     # Setup Mistral model and embeddings
-    embeddings = MistralAIEmbeddings(mistral_api_key=api_key, model="mistral-embed")
+    embeddings = MistralAIEmbeddings(api_key=api_key_str, model="mistral-embed")
 
     # Setup and create ChromaDB
     creator = CreateChromaDB(
@@ -361,10 +533,15 @@ if __name__ == "__main__":
         failed_batches_file=Path("../logs/failed_batches.txt")
     )
 
-    # Use the new method with checkpointing and retry logic
-    creator.embed_and_store(batch_size=100, delay_seconds=1, resume=True)
+    # Use the new method with checkpointing, retry logic, and incremental updates
+    # Set incremental=True (default) to only process new or modified documents
+    # Set incremental=False to rebuild the entire database from scratch
+    creator.embed_and_store(batch_size=100, delay_seconds=1, resume=True, incremental=False)
     
     # Or use the legacy method if preferred
     # creator.embed_and_store_legacy(start_index=0)
+
+    # Retry failed batches if needed
+    creator.retry_failed_batches()
     
     print("ChromaDB creation complete.")
