@@ -21,6 +21,7 @@ class MarkdownChunkerWithKeywordExtraction:
         chunk_overlap: int = 200,
         keybert_model: str = "minishlab/potion-base-8M",
         num_keywords: int = 5,
+        split_by_headers: bool = True,
         use_maxsum: bool = True,
         use_mmr: bool = False,
         cache_dir: str | Path = "./chunked_documents"
@@ -34,6 +35,7 @@ class MarkdownChunkerWithKeywordExtraction:
             chunk_overlap: Overlap between chunks
             keybert_model: Model name for KeyBERT (default uses sentence-transformers)
             num_keywords: Number of keywords to extract per chunk
+            split_by_headers: Whether to split by markdown headers first
             use_maxsum: Use Max Sum Similarity for keyword diversity
             use_mmr: Use Maximal Marginal Relevance for keyword diversity
             cache_dir: Directory to cache processed documents
@@ -44,6 +46,7 @@ class MarkdownChunkerWithKeywordExtraction:
         self.num_keywords = num_keywords
         self.use_maxsum = use_maxsum
         self.use_mmr = use_mmr
+        self.split_by_headers = split_by_headers
 
         # Setup cache directory
         self.cache_dir = Path(cache_dir)
@@ -60,6 +63,14 @@ class MarkdownChunkerWithKeywordExtraction:
             ("###", "header_3"),
             ("####", "header_4"),
         ]
+
+        # Define separators for text splitter
+        self.separators = [
+            "\n\n",  # Split by paragraphs first
+            "\n",    # Then by newlines
+            " ",     # Then by spaces (for long sentences)
+            "",      # Fallback to characters
+        ]
         
         # Initialize markdown splitter
         self.markdown_splitter = MarkdownHeaderTextSplitter(
@@ -69,8 +80,11 @@ class MarkdownChunkerWithKeywordExtraction:
         
         # Initialize text splitter for large sections
         self.text_splitter = RecursiveCharacterTextSplitter(
+            separators=self.separators,
             chunk_size=chunk_size,
-            chunk_overlap=chunk_overlap
+            chunk_overlap=chunk_overlap,
+            length_function=len,
+            is_separator_regex=False,
         )
 
 
@@ -209,11 +223,44 @@ class MarkdownChunkerWithKeywordExtraction:
         # Extract frontmatter
         frontmatter, content = self.extract_frontmatter(markdown_content)
         
-        # Split by headers
-        header_splits = self.markdown_splitter.split_text(content)
+        # Split by headers, if enabled
+        if self.split_by_headers:
+            header_splits = self.markdown_splitter.split_text(content)
         
-        # Further split large sections
-        documents = self.text_splitter.split_documents(header_splits)
+            # Further split large sections
+            documents = self.text_splitter.split_documents(header_splits)
+
+        else:
+            # Directly split by size
+            chunks = self.text_splitter.split_text(content)
+
+            # Post-process to merge list items
+            final_chunks = []
+            i = 0
+            while i < len(chunks):
+                chunk = chunks[i]
+                # Detect if the chunk starts a list
+                if re.match(r'^\s*(\d+\.|-|\*)', chunk):
+                    # Merge with next chunks until the list ends
+                    merged_chunk = chunk
+                    j = i + 1
+                    while j < len(chunks) and re.match(r'^\s*(\d+\.|-|\*)', chunks[j]):
+                        merged_chunk += "\n" + chunks[j]
+                        j += 1
+                    final_chunks.append(merged_chunk)
+                    i = j
+                else:
+                    final_chunks.append(chunk)
+                    i += 1
+
+            # Create documents with metadata
+            documents = [
+                Document(
+                    page_content=chunk,
+                    metadata={}
+                )
+                for chunk in final_chunks
+            ]
         
         # Enrich each document with frontmatter and keywords
         for doc in documents:
