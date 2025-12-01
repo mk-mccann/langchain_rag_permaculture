@@ -4,7 +4,7 @@ import json
 import hashlib
 
 from httpx import ReadError
-from alive_progress import alive_it
+from alive_progress import alive_it, alive_bar
 from typing import List, Dict, Set, Tuple, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 from langchain_chroma import Chroma
@@ -355,35 +355,36 @@ class CreateChromaDB:
         i = start_idx
         
         try:
-            for i in range(start_idx, len(documents), batch_size):
-                batch = documents[i:i + batch_size]
-                batch_num = i // batch_size + 1
-                
-                print(f"Processing batch {batch_num}/{total_batches} (indices {i}-{i+len(batch)-1})")
-                
-                try:
-                    self.add_batch_with_retry(batch)
-                    
-                    # Save checkpoint after successful batch
-                    self.save_checkpoint(i + batch_size, len(documents), batch_size)
-                    
-                    # Rate limiting delay
-                    sleep(delay_seconds)
-                    
-                except Exception as e:
-                    print(f"\nBatch {batch_num} failed after retries: {e}")
-                    
-                    # Log failed batch
-                    self.log_failed_batch(batch_num, i, i + len(batch) - 1, e)
-                    
-                    print(f"Logged to {self.failed_batches_file}. Continuing with next batch...")
-                    
-                    # Update checkpoint to skip this batch
-                    self.save_checkpoint(i + batch_size, len(documents), batch_size)
-                    
-                    # Longer delay after failure
-                    sleep(5)
-                    continue
+            with alive_bar(total_batches, dual_line=True, title="Embedding documents") as bar:
+                for i in range(start_idx, len(documents), batch_size):
+
+                    batch = documents[i:i + batch_size]
+                    batch_num = i // batch_size + 1
+                    bar.text=f"Processing batch {batch_num}/{total_batches} (indices {i}-{i+len(batch)-1})" 
+                                        
+                    try:
+                        self.add_batch_with_retry(batch)
+                        
+                        # Save checkpoint after successful batch
+                        self.save_checkpoint(i + batch_size, len(documents), batch_size)
+                        
+                        # Rate limiting delay
+                        sleep(delay_seconds)
+                        
+                    except Exception as e:
+                        print(f"\nBatch {batch_num} failed after retries: {e}")
+                        
+                        # Log failed batch
+                        self.log_failed_batch(batch_num, i, i + len(batch) - 1, e)
+                        
+                        print(f"Logged to {self.failed_batches_file}. Continuing with next batch...")
+                        
+                        # Update checkpoint to skip this batch
+                        self.save_checkpoint(i + batch_size, len(documents), batch_size)
+                        
+                        # Longer delay after failure
+                        sleep(5)
+                        continue
 
         except KeyboardInterrupt:
             print(f"\n\nProcess interrupted. Progress saved at index {i}.")
@@ -491,24 +492,27 @@ class CreateChromaDB:
         total_batches = len(failed_ranges)
         print(f"Retrying {total_batches} failed batches...")
 
-        for idx, (start_idx, end_idx) in enumerate(failed_ranges, start=1):
-            start_idx = max(0, start_idx)
-            end_idx = min(len(documents) - 1, end_idx)
-            if start_idx > end_idx:
-                print(f"Skipping invalid range {start_idx}-{end_idx}")
-                continue
+        with alive_bar(total_batches, dual_line=True) as bar:
 
-            batch = documents[start_idx:end_idx + 1]
-            print(f"Retrying failed batch {idx}/{total_batches} (indices {start_idx}-{end_idx})")
+            for idx, (start_idx, end_idx) in enumerate(failed_ranges, start=1):
+                start_idx = max(0, start_idx)
+                end_idx = min(len(documents) - 1, end_idx)
+                
+                if start_idx > end_idx:
+                    print(f"Skipping invalid range {start_idx}-{end_idx}")
+                    continue
 
-            try:
-                self.add_batch_with_retry(batch)
-                self.save_checkpoint(end_idx + 1, len(documents), len(batch))
-                sleep(delay_seconds)
-            except Exception as e:
-                print(f"Retry failed for indices {start_idx}-{end_idx}: {e}")
-                self.log_failed_batch(-1, start_idx, end_idx, e)
-                sleep(5)
+                batch = documents[start_idx:end_idx + 1]
+                bar.text = f"Retrying failed batch {idx}/{total_batches} (indices {start_idx}-{end_idx})"
+
+                try:
+                    self.add_batch_with_retry(batch)
+                    self.save_checkpoint(end_idx + 1, len(documents), len(batch))
+                    sleep(delay_seconds)
+                except Exception as e:
+                    print(f"Retry failed for indices {start_idx}-{end_idx}: {e}")
+                    self.log_failed_batch(-1, start_idx, end_idx, e)
+                    sleep(5)
 
         print("Failed batch retries complete.")
 
@@ -541,7 +545,7 @@ if __name__ == "__main__":
     # Use the new method with checkpointing, retry logic, and incremental updates
     # Set incremental=True (default) to only process new or modified documents
     # Set incremental=False to rebuild the entire database from scratch
-    creator.embed_and_store(batch_size=100, delay_seconds=1, resume=True, incremental=False)
+    creator.embed_and_store(batch_size=100, delay_seconds=1, resume=True, incremental=True)
     
     # Or use the legacy method if preferred
     # creator.embed_and_store_legacy(start_index=0)
