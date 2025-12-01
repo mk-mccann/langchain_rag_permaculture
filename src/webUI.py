@@ -3,7 +3,7 @@ import gradio as gr
 from pathlib import Path
 from dotenv import load_dotenv
 
-from RAGAgent import PermacultureRAGAgent
+from PermacultureRAGAgent import PermacultureRAGAgent
 
 
 # Load environment variables
@@ -13,8 +13,8 @@ mistral_api_key = os.getenv("MISTRAL_API_KEY").strip()
 # Initialize the RAG agent
 agent = PermacultureRAGAgent(
     chroma_db_dir=Path("../chroma_db"),
-    collection_name="permaculture_docs",
-    model_name="mistral-small-latest",
+    collection_source="perma_rag_collection",
+    model_source="mistral-small-latest",
     embeddings_model="mistral-embed",
 )
 
@@ -46,7 +46,15 @@ def chat_with_agent(message, history, thread_id="default"):
         if result["sources"]:
             for source in result["sources"]:
                 sources_text += f"- **[Source {source['source_number']}]** "
-                sources_text += f"File: `{source['file']}`, Page: {source['page']}\n"
+                if 'title' in source:
+                    sources_text += f"Title: {source['title']},  "
+                if 'header_2' in source:
+                    sources_text += f"Header: {source['header_2']}, "
+                if 'url' in source:
+                    sources_text += f"URL: {source['url']}), "
+                if 'page' in source:
+                    sources_text += f"Page: {source['page']}, "
+                sources_text += "\n"
         else:
             sources_text += "No sources retrieved."
         
@@ -182,11 +190,11 @@ def create_demo():
     return demo
 
 
-if __name__ == "__main__":
+if __source__ == "__main__":
     demo = create_demo()
     demo.launch(
         share=False,  # Set to True to create a public link
-        server_name="127.0.0.1",
+        server_source="127.0.0.1",
         server_port=7860,
         show_error=True
     )

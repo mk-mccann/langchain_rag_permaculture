@@ -33,7 +33,7 @@ class RetrieveDocumentsMiddleware(AgentMiddleware[CustomAgentState]):
 
         last_message = state["messages"][-1]
         retrieved_docs = self.vectorstore.similarity_search(
-            last_message.content,  # Changed from .text to .content
+            last_message.content,
             k=self.k_documents
         )
 
@@ -42,11 +42,13 @@ class RetrieveDocumentsMiddleware(AgentMiddleware[CustomAgentState]):
 
         for idx, doc in enumerate(retrieved_docs, 1):
             # Extract metadata for citation
-            source = doc.metadata.get('source', 'Unknown')
+            title = doc.metadata.get('title', 'Unknown')
+            header = doc.metadata.get('header_2', 'N/A')
+            url = doc.metadata.get('url', 'N/A')
             page = doc.metadata.get('page', 'N/A')
             
             docs_content_with_citations.append(
-                f"[Source {idx}] (File: {source}, Page: {page})\n{doc.page_content}"
+                f"[Source {idx}] (File: {title}, Section: {header}, URL: {url}, Page: {page})\n{doc.page_content}"
             )
         
         docs_content = "\n\n".join(docs_content_with_citations)
@@ -60,7 +62,7 @@ class RetrieveDocumentsMiddleware(AgentMiddleware[CustomAgentState]):
         
         return {
             "messages": [last_message.model_copy(update={"content": augmented_message_content})],
-            "context": retrieved_docs,
+            "sources": retrieved_docs,
         }
 
 
@@ -103,8 +105,8 @@ class PermacultureRAGAgent:
 
     def __init__(self,
         chroma_db_dir: Path | str,
-        collection_name: str,
-        model_name: str = "mistral-large-latest",
+        collection_source: str,
+        model_source: str = "mistral-large-latest",
         embeddings_model: str = "mistral-embed",
         temperature: float = 0.7,
         max_tokens: int = 1024,
@@ -116,8 +118,8 @@ class PermacultureRAGAgent:
         
         Args:
             chroma_db_dir (Path | str): Directory containing the ChromaDB database.
-            collection_name (str): Name of the ChromaDB collection.
-            model_name (str): Mistral model to use for chat.
+            collection_source (str): source of the ChromaDB collection.
+            model_source (str): Mistral model to use for chat.
             embeddings_model (str): Model to use for embeddings.
             temperature (float): Temperature for response generation.
             max_tokens (int): Maximum tokens in response.
@@ -125,7 +127,7 @@ class PermacultureRAGAgent:
         """
         
         self.chroma_db_dir = Path(chroma_db_dir)
-        self.collection_name = collection_name
+        self.collection_source = collection_source
         self.k_documents = k_documents
         
         # Initialize embeddings
@@ -133,14 +135,14 @@ class PermacultureRAGAgent:
         
         # Initialize vectorstore
         self.vectorstore = Chroma(
-            collection_name=collection_name,
+            collection_source=collection_source,
             embedding_function=self.embeddings,
             persist_directory=str(chroma_db_dir)
         )
         
         # Initialize chat model
         self.model = ChatMistralAI(
-            model_name=model_name,
+            model_source=model_source,
             temperature=temperature,
             max_tokens=max_tokens
         )
@@ -157,7 +159,7 @@ class PermacultureRAGAgent:
 
         self.agent.invoke(
             {"messages": [{"role": "user", 
-                        "content": "Hi! My name is Bob."}]
+                        "content": "Hi! My source is Bob."}]
                         },
             {"configurable": {"thread_id": "1"}},  
         )
@@ -256,6 +258,7 @@ class PermacultureRAGAgent:
                 sources.append({
                     "source_number": idx,
                     "file": doc.metadata.get('source', 'Unknown'),
+                    "url": doc.metadata.get('url', 'N/A'),
                     "page": doc.metadata.get('page', 'N/A'),
                     "metadata": doc.metadata
                 })
@@ -325,7 +328,7 @@ class PermacultureRAGAgent:
 
 
 
-if __name__ == "__main__":
+if __source__ == "__main__":
     import os
     from dotenv import load_dotenv
 
@@ -334,8 +337,8 @@ if __name__ == "__main__":
 
     agent = PermacultureRAGAgent(
         chroma_db_dir = Path("../chroma_db"),
-        collection_name = "permaculture_docs",
-        model_name = "mistral-small-latest",
+        collection_source = "permaculture_docs",
+        model_source = "mistral-small-latest",
         embeddings_model = "mistral-embed",
     )
     
