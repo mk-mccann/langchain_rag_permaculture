@@ -1,4 +1,2 @@
-- Extend CreateChromaDB to check the log for failured batches and rerun just those
-- Build an extensible system to add documents or new material to the RAG
-- Clean up UI
+- BAdd NLP-based chunking for better results with poorly formatted blogs
 - Add option for user to upload files and integrate that into UI
