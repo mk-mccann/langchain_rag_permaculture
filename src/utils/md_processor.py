@@ -15,6 +15,7 @@ Functions:
     - process_directory: Full processing pipeline for a directory
 """
 
+import re
 from pathlib import Path
 from typing import Optional, List, Dict, Set, Tuple, Any
 from alive_progress import alive_it
@@ -128,6 +129,69 @@ def remove_duplicate_lines(content: str) -> Tuple[str, bool]:
     return cleaned_content, cleaned_content != content
 
 
+# def remove_duplicated_headings(md_content: str) -> str:
+
+
+def standardize_headings(md_content: str) -> str:
+    # Split frontmatter and content
+    parts = re.split(r'^---\n.*?\n---\n', md_content, flags=re.DOTALL, maxsplit=1)
+    frontmatter = f"---\n{parts[1].strip()}\n---\n" if len(parts) > 1 else ""
+    content = parts[-1] if len(parts) > 1 else md_content
+
+    # Standardize headers in content only
+    content = re.sub(r'^(.+)\n=+', r'# \1', content, flags=re.MULTILINE)
+    content = re.sub(r'^(.+)\n-+', r'## \1', content, flags=re.MULTILINE)
+
+    # Recombine frontmatter and standardized content
+    return frontmatter + content
+
+
+def fix_frontmatter(md_content: str) -> Tuple[str, str]:
+    # Split the content into lines
+    lines = md_content.split('\n')
+
+    # Find the index of the last line in the frontmatter (contains ':')
+    last_frontmatter_index = 0
+    for i, line in enumerate(lines):
+        # Check for URLs that are NOT part of the frontmatter key (break on content URLs)
+        if ("https:" in line or "http:" in line) and not ("url: https:" in line or "url: http:" in line):
+            break  # Stop at first URL in content (not frontmatter)
+        # Special case: url field may contain "url: https:" or "url: http:"
+        elif ("url: https:" in line) or ("url: http:" in line):
+            last_frontmatter_index = i
+        elif (':' in line) or ("---" in line):
+            last_frontmatter_index = i
+        else:
+            break  # Stop at the first line without ':' after frontmatter lines
+
+    # Reconstruct the frontmatter and content
+    frontmatter_lines = lines[:last_frontmatter_index + 1]
+
+    # Remove any lines that are "---" (YAML delimiters)
+    frontmatter_lines = [line for line in frontmatter_lines if line.strip() != '---']
+
+    # Remove any duplicate keys in frontmatter
+    seen_keys = set()
+    unique_frontmatter_lines = []
+    for line in frontmatter_lines:
+        if "##" in line:
+            continue  # Skip comment lines
+        key = line.split(':', 1)[0].strip()
+        if key not in seen_keys:
+            unique_frontmatter_lines.append(line)
+            seen_keys.add(key)
+
+    frontmatter = '---\n' + '\n'.join(unique_frontmatter_lines) + '\n---\n'
+    content = '\n'.join(lines[last_frontmatter_index + 1:])
+
+    # Standardize headers in the content
+    content = re.sub(r'^(.+)\n=+', r'# \1', content, flags=re.MULTILINE)
+    content = re.sub(r'^(.+)\n-+', r'## \1', content, flags=re.MULTILINE)
+
+    # Combine the fixed frontmatter and standardized content
+    return frontmatter, content
+
+
 def rename_wiki_file(file_path: Path) -> Optional[Path]:
     """
     Rename files that start with 'wiki' by removing the prefix.
@@ -169,6 +233,8 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
             lines = frontmatter.strip().split('\n')
             
             for line in lines:
+                if "##" in line:
+                    continue  # Skip comment lines
                 if ':' in line:
                     key, value = line.split(':', 1)
                     key = key.strip()
@@ -280,7 +346,10 @@ def clean_single_file(
         return results
     
     original_content = content
-    
+
+    # Fix frontmatter
+    frontmatter, content = fix_frontmatter(content)
+        
     # Remove boilerplate
     if remove_boilerplate_text:
         content, modified = remove_boilerplate(content)
@@ -292,7 +361,16 @@ def clean_single_file(
         content, modified = remove_duplicate_lines(content)
         if modified:
             results['changes'].append('removed_duplicates')
+
+    # Standardize headings
+    content_before_headings = content
+    content = standardize_headings(content)
+    if content != content_before_headings:
+        results['changes'].append('standardized_headings')
     
+    # Rebuild full content
+    content = frontmatter + content
+
     # Write back if modified
     if content != original_content:
         try:
@@ -376,8 +454,24 @@ def update_single_file_frontmatter(
         results['added_fields'].append('source')
     
     # Update source
-    frontmatter_dict['source'] = source
-    
+    frontmatter_dict['source'] = source.replace('_', ' ')
+
+    # There are older files where 'name' was used instead of 'source'
+    if 'name' in frontmatter_dict:
+        del frontmatter_dict['name']
+
+    # Occasionally the description field may have colons in it, and we want to fix that because it
+    # can break parsers since it thinks it's a new key. So we replace colons with dashes in description.
+    for key in frontmatter_dict.keys():
+        if key not in FRONTMATTER_KEY_ORDER:
+            # This is probably the offending field
+            trailing = " -".join([key, frontmatter_dict[key]])
+
+            if "description" in frontmatter_dict.keys():
+                frontmatter_dict["description"] = frontmatter_dict["description"] + trailing
+            else:
+                print(trailing + " could not be fixed automatically.")
+
     # Add additional metadata
     if additional_metadata:
         for key, value in additional_metadata.items():
@@ -724,13 +818,13 @@ if __name__ == "__main__":
         if target.is_file():
             # Process single file
             print(f"\nProcessing single file: {target}")
-            results = process_single_file(target, verbose=True)
+            results = process_single_file(target, verbose=True, update_frontmatter=False)
             print_results(results, "Single File Processing")
         
         elif target.is_dir():
             # Process directory
             print(f"\nProcessing directory: {target}")
-            results = process_directory(target, verbose=False, show_progress=True)
+            results = process_directory(target, verbose=False, show_progress=True, update_frontmatter=False)
             print_results(results, "Directory Processing")
         
         else:
@@ -740,7 +834,7 @@ if __name__ == "__main__":
         # Default: process default directory
         if default_dir.exists():
             print(f"\nProcessing default directory: {default_dir}")
-            results = process_directory(default_dir, verbose=False, show_progress=True)
+            results = process_directory(default_dir, verbose=False, show_progress=True, update_frontmatter=True)
             print_results(results, "Directory Processing")
         else:
             print(f"Default directory does not exist: {default_dir}")
