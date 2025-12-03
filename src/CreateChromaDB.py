@@ -69,7 +69,7 @@ class CreateChromaDB:
         """
 
         self.vectorstore = Chroma(
-            collection_source=self.collection_source,
+            collection_name=self.collection_name,
             embedding_function=self.embeddings,
             persist_directory=str(self.chroma_db_dir)
         )
@@ -113,10 +113,51 @@ class CreateChromaDB:
             for key, value in index.items():
                 if value.get('cache_file') == cache_file:
                     file_in_index = True
-                    stored_hash = value.get('hash')
-                    if stored_hash:
-                        # TODO: compute and compare JSONL/source file hashes to detect changes
-                        pass
+                    mtime = value.get('mtime')
+                    size = value.get('size')
+                    content_hash = value.get('content_hash')
+                    source_path = value.get('file_path')
+
+                    # Check for modifications using mtime/size/content_hash
+                    if source_path and (mtime is not None and size is not None and content_hash):
+                        
+                        try:
+                        
+                            # Fast check: mtime/size
+                            st = Path(source_path).stat()
+                        
+                            if (st.st_mtime != mtime) or (st.st_size != size):
+                        
+                                # Confirm modification with content hash
+                                h = hashlib.sha256()
+                        
+                                with open(source_path, 'rb') as f:
+                                    for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                                        h.update(chunk)
+                                current_hash = h.hexdigest()
+                        
+                                if current_hash != content_hash:
+                                    modified_files.add(cache_file)
+                        
+                            # If mtime/size match, assume unchanged; skip hash
+                        
+                        except Exception:
+                            # Missing source or IO issue: mark as modified to be safe
+                            modified_files.add(cache_file)
+                    
+                    else:
+                    
+                        # Fallback: compare JSONL mtime if index lacks full hash data
+                        try:
+                            current_jsonl_mtime = file_path.stat().st_mtime
+                            indexed_jsonl_mtime = value.get('jsonl_mtime')
+                   
+                            if indexed_jsonl_mtime is None or indexed_jsonl_mtime != current_jsonl_mtime:
+                                modified_files.add(cache_file)
+                   
+                        except Exception:
+                            modified_files.add(cache_file)
+                   
                     break
             
             if not file_in_index:
@@ -350,12 +391,13 @@ class CreateChromaDB:
         
         # Calculate total batches for progress tracking
         total_batches = (len(documents) + batch_size - 1) // batch_size
+        batches_to_process = ((len(documents) - start_idx) + batch_size - 1) // batch_size
         
         # Initialize i for exception handling
         i = start_idx
         
         try:
-            with alive_bar(total_batches, dual_line=True, title="Embedding documents") as bar:
+            with alive_bar(batches_to_process, dual_line=True, title="Batches embedded") as bar:
                 for i in range(start_idx, len(documents), batch_size):
 
                     batch = documents[i:i + batch_size]
@@ -368,8 +410,12 @@ class CreateChromaDB:
                         # Save checkpoint after successful batch
                         self.save_checkpoint(i + batch_size, len(documents), batch_size)
                         
+                        # Update progress bar
+                        bar()
+
                         # Rate limiting delay
                         sleep(delay_seconds)
+                        
                         
                     except Exception as e:
                         print(f"\nBatch {batch_num} failed after retries: {e}")
@@ -381,6 +427,9 @@ class CreateChromaDB:
                         
                         # Update checkpoint to skip this batch
                         self.save_checkpoint(i + batch_size, len(documents), batch_size)
+
+                        # Update progress bar
+                        bar()
                         
                         # Longer delay after failure
                         sleep(5)
@@ -404,60 +453,6 @@ class CreateChromaDB:
             print("No failures recorded.")
 
 
-    def embed_and_store_legacy(self, 
-                        batch_size: int = 100, 
-                        refresh_interval: int = 5, 
-                        max_exceptions: int = 5,
-                        start_index: int = 0):
-        """
-        Legacy method: Embed and store using recursive approach.
-        
-        Args:
-            batch_size (int): Number of documents to process in each batch. Default is 100.
-            refresh_interval (int): Number of batches before refreshing embeddings. Default is 5.
-            max_exceptions (int): Maximum number of exceptions before quitting. Default is 5.
-            start_index (int): Index to start processing from. Default is 0.
-        """
-
-        def recursive_embed(documents, batch_size, refresh_interval, start_index=0, exception_count=0):
-            if exception_count >= max_exceptions:
-                print(f"Maximum exceptions ({max_exceptions}) reached. Quitting.")
-                print(f"Last processed batch: {start_index//batch_size}")
-                return
-            
-            refresh_counter = start_index // batch_size % refresh_interval
-            
-            # Initialize i for exception handling
-            i = start_index
-            
-            try:
-                for i in range(start_index, len(documents), batch_size):
-                    batch = documents[i:i + batch_size]
-                    self.vectorstore.add_documents(batch)
-                    print(f"Processed batch {i//batch_size + 1}/{(len(documents)-1)//batch_size + 1}")
-                    sleep(5)
-
-                    refresh_counter += 1
-                    if refresh_counter >= refresh_interval:
-                        refresh_counter = 0
-                        print("Refreshing embeddings to manage resources...")
-                        self.refresh_embeddings()
-                        
-            except ReadError as e:
-                exception_count += 1
-                print(f"ReadError occurred at batch {i//batch_size + 1}")
-                print(f"Exception count: {exception_count}/{max_exceptions}")
-                print("Cooling down for 5 minutes before retrying...")
-                sleep(5*60)
-                self.refresh_embeddings()
-                print(f"Resuming from batch {i//batch_size + 1}...")
-                recursive_embed(documents, batch_size, refresh_interval, start_index=i, exception_count=exception_count)
-
-        documents = self.load_chunked_documents()
-        print(f"Embedding and storing {len(documents)} documents into ChromaDB...")
-        recursive_embed(documents, batch_size, refresh_interval, start_index=start_index)
-
-
     def retry_failed_batches(self, delay_seconds: float = 1):
         """
         Read the failed batches log and retry embedding only those ranges.
@@ -468,6 +463,7 @@ class CreateChromaDB:
         try:
             with open(self.failed_batches_file, 'r') as f:
                 lines = f.readlines()
+
         except FileNotFoundError:
             print("No failed batches log found. Nothing to retry.")
             return
@@ -491,6 +487,7 @@ class CreateChromaDB:
         documents = self.load_chunked_documents()
         total_batches = len(failed_ranges)
         print(f"Retrying {total_batches} failed batches...")
+        failed_retries = 0
 
         with alive_bar(total_batches, dual_line=True) as bar:
 
@@ -509,10 +506,18 @@ class CreateChromaDB:
                     self.add_batch_with_retry(batch)
                     self.save_checkpoint(end_idx + 1, len(documents), len(batch))
                     sleep(delay_seconds)
+                
                 except Exception as e:
                     print(f"Retry failed for indices {start_idx}-{end_idx}: {e}")
                     self.log_failed_batch(-1, start_idx, end_idx, e)
+                    failed_retries += 1
                     sleep(5)
+
+        if failed_retries > 0:
+            print(f"✓ Retry complete with {failed_retries} failures remaining. Check {self.failed_batches_file}.")
+        else:
+            # Delete the failed batches file if all retries succeeded
+            self.failed_batches_file.unlink(missing_ok=True)
 
         print("Failed batch retries complete.")
 
@@ -543,13 +548,12 @@ if __name__ == "__main__":
     )
 
     # Use the new method with checkpointing, retry logic, and incremental updates
-    # Set incremental=True (default) to only process new or modified documents
-    # Set incremental=False to rebuild the entire database from scratch
-    creator.embed_and_store(batch_size=100, delay_seconds=1, resume=True, incremental=True)
+    # Set incremental=True and resume=True (default) to only process new or modified documents
+    # Set incremental=False and resume=False to rebuild the entire database from scratch
+    # If incremental=True and resume=False, it will reprocess new/modified documents from the start
+    # If incremental=False and resume=True, it will resume full processing from the last checkpoint
+    creator.embed_and_store(batch_size=100, delay_seconds=1, resume=True, incremental=False)
     
-    # Or use the legacy method if preferred
-    # creator.embed_and_store_legacy(start_index=0)
- 
     # Retry failed batches if needed
     creator.retry_failed_batches()
     

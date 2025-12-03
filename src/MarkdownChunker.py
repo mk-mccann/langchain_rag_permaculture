@@ -7,9 +7,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 
+import spacy
+import hashlib
 from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 from langchain_core.documents import Document
-
 from keybert import KeyBERT
 from model2vec import StaticModel
 
@@ -22,6 +23,7 @@ class MarkdownChunkerWithKeywordExtraction:
         keybert_model: str = "minishlab/potion-base-8M",
         num_keywords: int = 5,
         split_by_headers: bool = True,
+        split_by_nlp: bool = False,
         use_maxsum: bool = True,
         use_mmr: bool = False,
         cache_dir: str | Path = "./chunked_documents"
@@ -29,6 +31,8 @@ class MarkdownChunkerWithKeywordExtraction:
         
         """
         Initialize enhanced markdown chunker with YAML and KeyBERT support.
+        Generates an index of chunked files for intelligent caching when embedding
+        for incremental updates.
         
         Args:
             chunk_size: Target chunk size in characters
@@ -36,17 +40,30 @@ class MarkdownChunkerWithKeywordExtraction:
             keybert_model: Model name for KeyBERT (default uses sentence-transformers)
             num_keywords: Number of keywords to extract per chunk
             split_by_headers: Whether to split by markdown headers first
+            split_by_nlp: Whether to use NLP-based chunking
             use_maxsum: Use Max Sum Similarity for keyword diversity
             use_mmr: Use Maximal Marginal Relevance for keyword diversity
             cache_dir: Directory to cache processed documents
         """
     
+        
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
+        
         # Initialize KeyBERT
         self.kw_model = KeyBERT(model=StaticModel.from_pretrained(keybert_model))
         self.num_keywords = num_keywords
         self.use_maxsum = use_maxsum
         self.use_mmr = use_mmr
-        self.split_by_headers = split_by_headers
+
+        self.header_split = split_by_headers
+        self.nlp_split = split_by_nlp
+
+        if split_by_headers and split_by_nlp:
+            self._choose_chunking_method()
+        
+        if not split_by_headers and not split_by_nlp:
+            print("ℹ️  Using size-based chunking.")
 
         # Setup cache directory
         self.cache_dir = Path(cache_dir)
@@ -87,6 +104,37 @@ class MarkdownChunkerWithKeywordExtraction:
             is_separator_regex=False,
         )
 
+        # Define NLP for nlp-based chunking - Load spaCy's English model
+        self.nlp = spacy.load("en_core_web_sm")
+
+
+    def _choose_chunking_method(self):
+        print("\n⚠️  Cannot use both header splitting and NLP splitting simultaneously.")
+        print("Please choose one splitting method:\n")
+        print("  1. Header-based splitting (recommended for structured documents)")
+        print("  2. NLP-based splitting (recommended for natural text)")
+        print("  3. Size-based splitting (simple fallback)")
+        
+        while True:
+            choice = input("\nEnter your choice (1, 2, or 3): ").strip()
+            if choice == "1":
+                self.header_split = True
+                self.nlp_split = False
+                print("✓ Using header-based splitting")
+                break
+            elif choice == "2":
+                self.header_split = False
+                self.nlp_split = True
+                print("✓ Using NLP-based splitting")
+                break
+            elif choice == "3":
+                self.header_split = False
+                self.nlp_split = False
+                print("✓ Using size-based splitting")
+                break
+            else:
+                print("Invalid choice. Please enter 1, 2, or 3.")
+
 
     def _load_index(self) -> Dict:
         """Load index of processed files."""
@@ -104,11 +152,118 @@ class MarkdownChunkerWithKeywordExtraction:
             json.dump(self.processed_files, f, indent=2)
     
 
-    def _get_file_hash(self, file_path: str) -> str:
-        """Get file modification time as hash."""
-        
-        return str(os.path.getmtime(file_path))
+    def _get_file_stats(self, file_path: str) -> tuple[float, int]:
+        """Return (mtime, size) for a file."""
+        st = os.stat(file_path)
+        return st.st_mtime, st.st_size
 
+
+    def _sha256_file(self, file_path: str) -> str:
+        """Compute SHA-256 hash of a file's contents (streamed)."""
+        h = hashlib.sha256()
+        with open(file_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b''):
+                h.update(chunk)
+        return h.hexdigest()
+
+
+    def _useNLPChunking(self, content: str) -> List[Document]:
+        """
+        Chunk text using NLP sentence boundaries.
+        
+        Args:
+            text: Text to chunk
+            
+        Returns:
+            List of text chunks
+        """
+
+        # Process the content with spaCy
+        doc = self.nlp(content)
+
+        # Group sentences into coherent chunks
+        chunks = []
+        current_chunk = []
+        current_length = 0
+        max_chunk_size = self.chunk_size  # Target chunk size in characters
+
+        for sent in doc.sents:
+            sent_text = sent.text.strip()
+            sent_length = len(sent_text)
+
+            # Add sentence to current chunk if it fits
+            if current_length + sent_length <= max_chunk_size:
+                current_chunk.append(sent_text)
+                current_length += sent_length
+            else:
+                # Finalize the current chunk
+                chunks.append(" ".join(current_chunk))
+                current_chunk = [sent_text]
+                current_length = sent_length
+
+        # Add the last chunk
+        if current_chunk:
+            chunks.append(" ".join(current_chunk))
+
+        # Post-process to merge short chunks and handle lists
+        final_chunks = []
+        for chunk in chunks:
+            # Detect lists and merge them with the next chunk if split
+            if re.match(r'^\s*(\d+\.|-|\*)', chunk) and len(chunk) < max_chunk_size * 0.5:
+                # Merge with next chunk if it's a list and too short
+                if chunks.index(chunk) < len(chunks) - 1:
+                    next_chunk = chunks[chunks.index(chunk) + 1]
+                    if re.match(r'^\s*(\d+\.|-|\*)', next_chunk):
+                        chunk += "\n" + next_chunk
+                        chunks.remove(next_chunk)
+            final_chunks.append(chunk)
+
+        # Create documents with metadata
+        documents = [
+            Document(
+                page_content=chunk,
+                metadata={}
+            )
+            for chunk in final_chunks
+        ]
+
+        return documents
+
+
+    def _sizeChunking(self, content: str) -> List[Document]:
+        # Directly split by size
+        chunks = self.text_splitter.split_text(content)
+
+        # Post-process to merge list items
+        final_chunks = []
+        i = 0
+        while i < len(chunks):
+            chunk = chunks[i]
+            # Detect if the chunk starts a list
+            if re.match(r'^\s*(\d+\.|-|\*)', chunk):
+                # Merge with next chunks until the list ends
+                merged_chunk = chunk
+                j = i + 1
+                while j < len(chunks) and re.match(r'^\s*(\d+\.|-|\*)', chunks[j]):
+                    merged_chunk += "\n" + chunks[j]
+                    j += 1
+                final_chunks.append(merged_chunk)
+                i = j
+            else:
+                final_chunks.append(chunk)
+                i += 1
+
+        # Create documents with metadata
+        documents = [
+            Document(
+                page_content=chunk,
+                metadata={}
+            )
+            for chunk in final_chunks
+        ]
+
+        return documents
+    
 
     def extract_frontmatter(self, markdown_content: str) -> tuple[Dict, str]:
         """
@@ -224,43 +379,19 @@ class MarkdownChunkerWithKeywordExtraction:
         frontmatter, content = self.extract_frontmatter(markdown_content)
         
         # Split by headers, if enabled
-        if self.split_by_headers:
+        if self.header_split:
             header_splits = self.markdown_splitter.split_text(content)
         
-            # Further split large sections
+            # Further split large sections by size
             documents = self.text_splitter.split_documents(header_splits)
 
+        elif self.nlp_split:
+            # Use NLP-based chunking
+            documents = self._useNLPChunking(content)
+
         else:
-            # Directly split by size
-            chunks = self.text_splitter.split_text(content)
-
-            # Post-process to merge list items
-            final_chunks = []
-            i = 0
-            while i < len(chunks):
-                chunk = chunks[i]
-                # Detect if the chunk starts a list
-                if re.match(r'^\s*(\d+\.|-|\*)', chunk):
-                    # Merge with next chunks until the list ends
-                    merged_chunk = chunk
-                    j = i + 1
-                    while j < len(chunks) and re.match(r'^\s*(\d+\.|-|\*)', chunks[j]):
-                        merged_chunk += "\n" + chunks[j]
-                        j += 1
-                    final_chunks.append(merged_chunk)
-                    i = j
-                else:
-                    final_chunks.append(chunk)
-                    i += 1
-
-            # Create documents with metadata
-            documents = [
-                Document(
-                    page_content=chunk,
-                    metadata={}
-                )
-                for chunk in final_chunks
-            ]
+            # Direct size-based chunking
+            documents = self._sizeChunking(content)
         
         # Enrich each document with frontmatter and keywords
         for doc in documents:
@@ -302,8 +433,6 @@ class MarkdownChunkerWithKeywordExtraction:
                     'metadata': doc.metadata
                 }
                 f.write(json.dumps(doc_dict, ensure_ascii=False) + '\n')
-
-        # print(f"Saved {len(documents)} documents to {output_path}")
     
 
     def load_documents_jsonl(self, input_file: str) -> List[Document]:
@@ -325,8 +454,6 @@ class MarkdownChunkerWithKeywordExtraction:
                 )
                 documents.append(doc)
         
-        # print(f"Loaded {len(documents)} documents from {input_path}")
-
         return documents
 
 
@@ -343,7 +470,6 @@ class MarkdownChunkerWithKeywordExtraction:
         """
         
         file_path = str(Path(file_path).resolve())
-        file_hash = self._get_file_hash(file_path)
         
         # Maintain one level of parent directory in cache structure
         file_path_obj = Path(file_path)
@@ -356,14 +482,30 @@ class MarkdownChunkerWithKeywordExtraction:
         cache_subdir = self.cache_dir / parent_dir
         cache_subdir.mkdir(parents=True, exist_ok=True)
         
-        # Check if already processed and unchanged
+        # Check if already processed and unchanged using mtime/size/content_hash
         if not force_reprocess and cache_key in self.processed_files:
-            if self.processed_files[cache_key]['hash'] == file_hash:
-                # print(f"Loading cached chunks for {file_path}")
-                return self.load_documents_jsonl(cache_file)
+            cached = self.processed_files[cache_key]
+            cached_mtime = cached.get('mtime')
+            cached_size = cached.get('size')
+            cached_hash = cached.get('content_hash')
+            
+            if cached_mtime is not None and cached_size is not None and cached_hash:
+                # Fast check: compare mtime and size
+                try:
+                    current_mtime, current_size = self._get_file_stats(file_path)
+                    if current_mtime == cached_mtime and current_size == cached_size:
+                        # Unchanged: skip reprocessing
+                        return self.load_documents_jsonl(cache_file)
+                    # Changed: verify with content hash
+                    current_hash = self._sha256_file(file_path)
+                    if current_hash == cached_hash:
+                        # False positive from mtime/size; content unchanged
+                        return self.load_documents_jsonl(cache_file)
+                except Exception:
+                    # File issue; reprocess
+                    pass
         
         # Process the file
-        # print(f"Processing {file_path}...")
         with open(file_path, 'r', encoding='utf-8') as f:
             content = f.read()
         
@@ -376,11 +518,19 @@ class MarkdownChunkerWithKeywordExtraction:
         # Save to cache
         self.save_documents_jsonl(documents, cache_file)
         
-        # Update index
+        # Update index with mtime, size, and content hash
+        mtime, size = self._get_file_stats(file_path)
+        content_hash = self._sha256_file(file_path)
+        
+        # Also record JSONL mtime for diagnostics/fallback
+        jsonl_mtime = (self.cache_dir / cache_file).stat().st_mtime if (self.cache_dir / cache_file).exists() else None
         self.processed_files[cache_key] = {
             'file_path': file_path,
-            'hash': file_hash,
+            'mtime': mtime,
+            'size': size,
+            'content_hash': content_hash,
             'cache_file': cache_file,
+            'jsonl_mtime': jsonl_mtime,
             'num_chunks': len(documents),
             'processed_at': datetime.now().isoformat()
         }
@@ -430,7 +580,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--data_directory",
+        "--data-directory",
         type=str,
         default="../data/raw",
         required=True,
@@ -444,6 +594,8 @@ if __name__ == "__main__":
         num_keywords=5,
         use_maxsum=False,
         use_mmr=False,
+        split_by_nlp=False,
+        split_by_headers=False,
         cache_dir=directory_path.parents[1] / "chunked_documents"
     )
     
