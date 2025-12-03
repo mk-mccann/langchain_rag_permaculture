@@ -15,10 +15,14 @@ Functions:
     - process_directory: Full processing pipeline for a directory
 """
 
+
 import re
+from os import cpu_count
+
 from pathlib import Path
+from alive_progress import alive_bar, alive_it
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, List, Dict, Set, Tuple, Any
-from alive_progress import alive_it
 
 
 # Configuration constants
@@ -553,18 +557,19 @@ def process_single_file(
 def clean_directory(
     directory: Path | str,
     recursive: bool = True,
+    workers: Optional[int] = 1,
     remove_boilerplate_text: bool = True,
     remove_duplicates: bool = True,
     rename_wiki: bool = True,
     verbose: bool = False,
-    show_progress: bool = True
 ) -> Dict[str, Any]:
     """
-    Clean all markdown files in a directory.
+    Clean all markdown files in a directory (multithreaded).
     
     Args:
         directory: Path to directory to process
         recursive: Process subdirectories recursively
+        workers: Number of parallel worker threads (default: CPU count * 2)
         remove_boilerplate_text: Whether to remove boilerplate content
         remove_duplicates: Whether to remove duplicate lines
         rename_wiki: Whether to rename wiki files
@@ -574,8 +579,8 @@ def clean_directory(
     Returns:
         Dictionary with summary statistics
     """
+
     dir_path = Path(directory)
-    
     if not dir_path.exists():
         return {'error': f'Directory {directory} does not exist'}
     
@@ -588,121 +593,140 @@ def clean_directory(
         'errors': 0
     }
     
-    # Collect all files
+    # Collect all files (filter to files only)
     if recursive:
-        files = list(dir_path.glob('**/*'))
+        files = [f for f in dir_path.glob('**/*') if f.is_file()]
     else:
-        files = list(dir_path.iterdir())
+        files = [f for f in dir_path.iterdir() if f.is_file()]
     
-    files = [f for f in files if f.is_file()]
-    
-    # Process with or without progress bar
-    iterator = alive_it(files, title="Cleaning files") if show_progress else files
-    
-    for file_path in iterator:
-        stats['total_files'] += 1
-        
-        # Handle subdirectories if not recursive at file level
-        if file_path.is_dir() and not recursive:
-            continue
-        
-        result = clean_single_file(
-            file_path,
+    stats['total_files'] = len(files)
+    if not files:
+        return stats
+
+    # Worker callable
+    def _process(path: Path) -> Dict[str, Any]:
+        return clean_single_file(
+            path,
             remove_boilerplate_text=remove_boilerplate_text,
             remove_duplicates=remove_duplicates,
             rename_wiki=rename_wiki,
             verbose=verbose
         )
-        
-        if result.get('removed'):
-            stats['removed'] += 1
-        elif result.get('modified'):
-            stats['modified'] += 1
-        if result.get('renamed'):
-            stats['renamed'] += 1
-        if result.get('skipped'):
-            stats['skipped'] += 1
-        if result.get('error'):
-            stats['errors'] += 1
-    
+
+    # Thread pool size: use I/O-bound friendly count
+    if not workers or workers < 1:
+        max_workers = max(4, (cpu_count() or 4) * 2)
+    else:
+        max_workers = workers
+
+    # Process files with progress bar
+    with alive_bar(len(files), title="Cleaning files") as bar:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_path = {executor.submit(_process, f): f for f in files}
+            for future in as_completed(future_to_path):
+                result = future.result()
+                if result.get('removed'):
+                    stats['removed'] += 1
+                elif result.get('modified'):
+                    stats['modified'] += 1
+                if result.get('renamed'):
+                    stats['renamed'] += 1
+                if result.get('skipped'):
+                    stats['skipped'] += 1
+                if result.get('error'):
+                    stats['errors'] += 1
+                bar()
+
     return stats
 
 
 def update_directory_frontmatter(
     directory: Path | str,
+    workers: Optional[int] = 1,
     recursive: bool = True,
     source: Optional[str] = None,
     use_parent_as_source: bool = True,
     verbose: bool = False,
-    show_progress: bool = True
 ) -> Dict[str, Any]:
     """
-    Update frontmatter for all markdown files in a directory.
+    Update frontmatter for all markdown files in a directory (multithreaded).
     
     Args:
         directory: Path to directory to process
+        workers: Number of parallel worker threads (default: CPU count * 2)
         recursive: Process subdirectories recursively
         source: Source identifier (if None and use_parent_as_source=True, uses parent dir)
         use_parent_as_source: Use parent directory name as source if source not provided
         verbose: Print detailed information
-        show_progress: Show progress bar
         
     Returns:
         Dictionary with summary statistics
     """
     dir_path = Path(directory)
-    
+
     if not dir_path.exists():
         return {'error': f'Directory {directory} does not exist'}
-    
+
     stats = {
         'total_files': 0,
         'modified': 0,
         'skipped': 0,
         'errors': 0
     }
-    
+
     # Collect markdown files
     if recursive:
         md_files = list(dir_path.glob('**/*.md'))
     else:
         md_files = list(dir_path.glob('*.md'))
-    
-    # Process with or without progress bar
-    iterator = alive_it(md_files, title="Updating frontmatter") if show_progress else md_files
-    
-    for file_path in iterator:
-        stats['total_files'] += 1
-        
+
+    stats['total_files'] = len(md_files)
+    if not md_files:
+        return stats
+
+    def _process(file_path: Path) -> Dict[str, Any]:
         # Determine source for this file
         file_source = source
         if file_source is None and use_parent_as_source:
             file_source = file_path.parent.name
-        
-        result = update_single_file_frontmatter(
+
+        return update_single_file_frontmatter(
             file_path,
             source=file_source,
             verbose=verbose
         )
-        
-        if result.get('modified'):
-            stats['modified'] += 1
-        if result.get('skipped'):
-            stats['skipped'] += 1
-        if result.get('error'):
-            stats['errors'] += 1
-    
+
+    # Thread pool size: use I/O-bound friendly count
+    if not workers or workers < 1:
+        max_workers = max(4, (cpu_count() or 4) * 2)
+    else:
+        max_workers = workers
+
+    # Process files with progress bar
+    with alive_bar(len(md_files), title="Updating frontmatter") as bar:
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_path = {executor.submit(_process, f): f for f in md_files}
+            for future in as_completed(future_to_path):
+                result = future.result()
+                if result.get('modified'):
+                    stats['modified'] += 1
+                if result.get('skipped'):
+                    stats['skipped'] += 1
+                if result.get('error'):
+                    stats['errors'] += 1
+                bar()
+
     return stats
 
 
 def process_directory(
     directory: Path | str,
     recursive: bool = True,
+    workers: Optional[int] = 1,
     clean: bool = True,
     update_frontmatter: bool = True,
     source: Optional[str] = None,
     verbose: bool = False,
-    show_progress: bool = True
 ) -> Dict[str, Any]:
     """
     Full processing pipeline for a directory (clean + update frontmatter).
@@ -710,11 +734,11 @@ def process_directory(
     Args:
         directory: Path to directory to process
         recursive: Process subdirectories recursively
+        workers: Number of parallel worker threads (default: CPU count * 2)
         clean: Whether to clean files
         update_frontmatter: Whether to update frontmatter
         source: Source identifier for frontmatter
         verbose: Print detailed information
-        show_progress: Show progress bar
         
     Returns:
         Dictionary with combined summary statistics
@@ -728,7 +752,7 @@ def process_directory(
             directory,
             recursive=recursive,
             verbose=verbose,
-            show_progress=show_progress
+            workers=workers,
         )
         results['clean'] = clean_stats
     
@@ -740,7 +764,7 @@ def process_directory(
             recursive=recursive,
             source=source,
             verbose=verbose,
-            show_progress=show_progress
+            workers=workers,
         )
         results['frontmatter'] = frontmatter_stats
     
@@ -810,7 +834,7 @@ if __name__ == "__main__":
     print("=" * 60)
     
     # Default directory
-    default_dir = Path("../../data/raw/scraped_pages")
+    default_dir = Path("../../data/raw/md_scraped_pages")
     
     # Process based on command line args
     if len(sys.argv) > 1:
@@ -825,7 +849,7 @@ if __name__ == "__main__":
         elif target.is_dir():
             # Process directory
             print(f"\nProcessing directory: {target}")
-            results = process_directory(target, verbose=False, show_progress=True, update_frontmatter=False)
+            results = process_directory(target, verbose=False, update_frontmatter=False, workers=3)
             print_results(results, "Directory Processing")
         
         else:
@@ -835,7 +859,7 @@ if __name__ == "__main__":
         # Default: process default directory
         if default_dir.exists():
             print(f"\nProcessing default directory: {default_dir}")
-            results = process_directory(default_dir, verbose=False, show_progress=True, update_frontmatter=True)
+            results = process_directory(default_dir, verbose=False, update_frontmatter=True, workers=3)
             print_results(results, "Directory Processing")
         else:
             print(f"Default directory does not exist: {default_dir}")
