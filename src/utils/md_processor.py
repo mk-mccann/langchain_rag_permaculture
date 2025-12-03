@@ -41,6 +41,7 @@ BOILERPLATE_INDICATORS = [
     "Navigation menu",
     "Contribute to this page",
     "###### WHO WE ARE",
+    "###### WHO IS ONE COMMUNITY",
     "Retrieved from",
 ]
 
