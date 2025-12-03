@@ -290,23 +290,28 @@ class HTML2MDScraper:
                 # Maintain per-thread delay between requests
                 time.sleep(self.delay_seconds)
 
-        # Tune max_workers as needed; keep modest to respect target sites
-        max_workers = min((os.cpu_count() or 4), workers)
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(worker) for _ in range(max_workers)]
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(worker) for _ in range(workers)]
             for f in futures:
                 f.result()
 
 
-    def process_config(self, config_file: str | Path):
+    def process_config(self, config_file: str | Path, workers: int | None = 1):
         """
         Process a JSON configuration file to crawl multiple websites.
 
         Args:
             config_file (str | Path): Path to the JSON configuration file.
+            workers (int): Number of concurrent threads to use for crawling each site. Defaults to single thread.
         """
 
         config = self.load_json_config(config_file)
+
+        # Tune max_workers as needed; keep modest to respect target sites
+        if not workers or workers < 1:
+            max_workers = (os.cpu_count() or 4)
+        else:
+            max_workers = workers
 
         for cfg in config:
             site_source = cfg['source']
@@ -316,7 +321,7 @@ class HTML2MDScraper:
             output_dir.mkdir(parents=True, exist_ok=True)
 
             print(f"\nCrawling {site_source} ({base_url})")
-            self.crawl_site(cfg, output_dir)
+            self.crawl_site(cfg, output_dir, workers=max_workers)
 
             print(f"\nScraped {len(self.visited_urls)} pages to {output_dir}/")
             self.visited_urls.clear()
@@ -329,4 +334,4 @@ if __name__ == "__main__":
     base_output_dir = Path("../data/raw/md_scraped_pages")
 
     scraper = HTML2MDScraper(base_output_dir=base_output_dir, target_langs=['en'], delay_seconds=1)
-    scraper.process_config(input_file)
+    scraper.process_config(input_file, workers=4)

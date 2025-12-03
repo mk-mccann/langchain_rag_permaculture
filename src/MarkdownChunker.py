@@ -2,17 +2,18 @@ import os
 import re
 import yaml
 import json
-from alive_progress import alive_it
+from alive_progress import alive_it, alive_bar
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 
 import spacy
-import hashlib
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
-from langchain_core.documents import Document
+import hashlib  
 from keybert import KeyBERT
-from model2vec import StaticModel
+from model2vec import StaticModel      
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 
 
 class MarkdownChunkerWithKeywordExtraction:
@@ -467,6 +468,13 @@ class MarkdownChunkerWithKeywordExtraction:
         """
         Process a markdown file with caching.
         Only reprocesses if file has changed or force_reprocess=True.
+
+        Args:
+            file_path: Path to markdown file
+            force_reprocess: Whether to force reprocessing
+            extract_keywords: Whether to extract keywords
+        Returns:
+            List of LangChain Documents
         """
         
         file_path = str(Path(file_path).resolve())
@@ -542,34 +550,66 @@ class MarkdownChunkerWithKeywordExtraction:
     def process_directory(
         self,
         directory: Path | str,
-        pattern: str = "**/*.md",
         force_reprocess: bool = False,
-        extract_keywords: bool = True
+        extract_keywords: bool = True,
+        max_workers: int | None = None
         ) -> List[Document]:
         
         """
         Process all markdown files in a directory with intelligent caching.
-        Only processes new or modified files.
+        Only processes new or modified files. Multiple files are processed in parallel.
+
+        Args:
+            directory: Directory containing markdown files
+            force_reprocess: Whether to force reprocessing of all files
+            extract_keywords: Whether to extract keywords
+            max_workers: Maximum number of parallel workers (default: 1)
+
+        Returns:
+            List of LangChain Documents
         """
         
         dir_path = Path(directory)
-        md_files = list(dir_path.glob(pattern))
+        md_files = list(dir_path.glob("**/*.md"))
         
         print(f"Found {len(md_files)} markdown files")
         all_documents = []
-        
-        for file_path in alive_it(md_files, title="Chunking markdown files"):
+
+        # Parallelize file processing with a thread pool while preserving progress bar        
+        # Determine worker count: user-specified or default to single-threaded
+        if max_workers is None:
+            max_workers = 1
+        else:
+            max_workers = min((os.cpu_count() or 4), int(max_workers))
+
+        def _process(path: Path) -> tuple[Path, List[Document]]:
             try:
-                documents = self.process_file_with_cache(
-                    str(file_path),
+                docs = self.process_file_with_cache(
+                    str(path),
                     force_reprocess,
                     extract_keywords
                 )
-                all_documents.extend(documents)
-
+                return path, docs
             except Exception as e:
-                print(f"Error processing {file_path}: {e}")
-        
+                print(f"Error processing {path}: {e}")
+                return path, []
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {executor.submit(_process, p): p for p in md_files}
+            processed = 0
+
+            with alive_bar(len(md_files), title="Chunking markdown files", dual_line=True) as bar:
+
+                for future in as_completed(future_map):
+                    _, docs = future.result()
+
+                    if docs:
+                        all_documents.extend(docs)
+
+                    processed += 1
+                    bar.text = f"Processed {processed}/{len(md_files)} files"
+                    bar()
+
         print(f"\nTotal: {len(all_documents)} chunks from {len(md_files)} files")
         return all_documents
     
@@ -586,6 +626,23 @@ if __name__ == "__main__":
         required=True,
         help="Directory containing markdown files to chunk"
     )
+    parser.add_argument(
+        "--max-workers",
+        type=int,
+        default=None,
+        help="Maximum number of parallel workers for chunking"
+    )
+    parser.add_argument(
+        "--force-reprocess",
+        action="store_true",
+        help="Force reprocessing of all files regardless of cache"
+    )
+    parser.add_argument(
+        "--no-keywords",
+        action="store_true",
+        default=False,
+        help="Disable keyword extraction"
+    )
 
     args = parser.parse_args()
     directory_path = Path(args.data_directory)
@@ -599,6 +656,11 @@ if __name__ == "__main__":
         cache_dir=directory_path.parents[1] / "chunked_documents"
     )
     
-    documents = chunker.process_directory(directory_path, extract_keywords=True)
+    documents = chunker.process_directory(
+        directory_path,
+        extract_keywords=args.no_keywords,
+        force_reprocess=args.force_reprocess,
+        max_workers=args.max_workers
+    )
     
     print(f"Total documents created: {len(documents)}")
