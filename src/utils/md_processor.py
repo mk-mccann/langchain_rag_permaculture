@@ -18,11 +18,11 @@ Functions:
 
 import re
 from os import cpu_count
+from typing import Optional, Dict, Tuple, Any
 
 from pathlib import Path
-from alive_progress import alive_bar, alive_it
+from alive_progress import alive_bar
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional, List, Dict, Set, Tuple, Any
 
 
 # Configuration constants

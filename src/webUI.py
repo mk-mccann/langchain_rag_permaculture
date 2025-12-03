@@ -3,7 +3,7 @@ import gradio as gr
 from pathlib import Path
 from dotenv import load_dotenv
 
-from RAGAgent import RAGAgent, build_citation, format_citation_line
+from src.rag_agent import RAGAgent, build_citation, format_citation_line
 
 
 # Load environment variables

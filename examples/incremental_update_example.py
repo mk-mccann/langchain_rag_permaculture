@@ -16,7 +16,7 @@ import sys
 
 # Add parent directory to path to import CreateChromaDB
 sys.path.append(str(Path(__file__).parent.parent / "src"))
-from src.CreateChromaDB import CreateChromaDB
+from src.create_chromadb import CreateChromaDB
 
 
 def main():

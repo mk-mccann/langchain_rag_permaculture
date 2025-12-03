@@ -2,7 +2,7 @@ import pytest
 from pathlib import Path
 import json
 import tempfile
-from src.CreateChromaDB import CreateChromaDB
+from src.create_chromadb import CreateChromaDB
 
 @pytest.fixture
 def temp_dirs():

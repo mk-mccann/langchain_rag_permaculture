@@ -248,6 +248,6 @@ def process_folder(input_folder: str, output_folder: str) -> None:
 
 if __name__ == "__main__":
     INPUT_FOLDER = "../../data/raw/pdfs"
-    OUTPUT_FOLDER = "../../data/raw/markdown_output"
+    OUTPUT_FOLDER = "../../data/raw/pdfs/markdown_output"
     
     process_folder(INPUT_FOLDER, OUTPUT_FOLDER)

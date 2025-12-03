@@ -2,7 +2,7 @@ import os
 import re
 import yaml
 import json
-from alive_progress import alive_it, alive_bar
+from alive_progress import alive_bar
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
@@ -460,7 +460,7 @@ class MarkdownChunkerWithKeywordExtraction:
 
     def process_file_with_cache(
         self,
-        file_path: str,
+        file_path: Path|str,
         force_reprocess: bool = False,
         extract_keywords: bool = True
         ) -> List[Document]:
@@ -470,9 +470,9 @@ class MarkdownChunkerWithKeywordExtraction:
         Only reprocesses if file has changed or force_reprocess=True.
 
         Args:
-            file_path: Path to markdown file
-            force_reprocess: Whether to force reprocessing
-            extract_keywords: Whether to extract keywords
+            file_path (Path|str): Path to markdown file
+            force_reprocess (bool): Whether to force reprocessing
+            extract_keywords (bool): Whether to extract keywords
         Returns:
             List of LangChain Documents
         """
@@ -549,10 +549,10 @@ class MarkdownChunkerWithKeywordExtraction:
 
     def process_directory(
         self,
-        directory: Path | str,
+        directory: Path|str,
         force_reprocess: bool = False,
         extract_keywords: bool = True,
-        max_workers: int | None = None
+        max_workers: int|None = None
         ) -> List[Document]:
         
         """
@@ -560,10 +560,10 @@ class MarkdownChunkerWithKeywordExtraction:
         Only processes new or modified files. Multiple files are processed in parallel.
 
         Args:
-            directory: Directory containing markdown files
-            force_reprocess: Whether to force reprocessing of all files
-            extract_keywords: Whether to extract keywords
-            max_workers: Maximum number of parallel workers (default: 1)
+            directory (Path|str): Directory containing markdown files
+            force_reprocess (bool): Whether to force reprocessing of all files
+            extract_keywords (bool): Whether to extract keywords
+            max_workers (int|None): Maximum number of parallel workers (default: 1)
 
         Returns:
             List of LangChain Documents
