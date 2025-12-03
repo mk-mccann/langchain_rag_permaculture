@@ -1,11 +1,13 @@
 [
-    {"name": "One Community Global", 
+    {"source": "One Community Global", 
     "url": "https://onecommunityglobal.org/site_map/#all-pages/",
+    "site_map": false,
     "license": "CC BY 3.0"
     },
 
-    {"name": "Open Source Ecology", 
+    {"source": "Open Source Ecology", 
     "url": "https://wiki.opensourceecology.org/wiki/",
+    "site_map": false,
     "license": "CC BY 4.0"
     }
 
