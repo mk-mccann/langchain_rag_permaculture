@@ -104,7 +104,7 @@ def fix_errant_spaces_aggressive(text):
     return ' '.join(fixed_words)
 
 
-def pdf_to_markdown(pdf_path: str, output_path: str) -> None:
+def pdf_to_markdown(pdf_path: Path|str, output_path: Path|str) -> None:
     """Convert a PDF file to markdown while preserving page numbers."""
     doc = pymupdf.open(pdf_path)
     md_text = pymupdf4llm.to_markdown(doc, page_chunks=True, write_images=False, header=False)
@@ -199,7 +199,7 @@ def fix_markdown_tables(content, column_names=None):
     return '\n'.join(result)
 
 
-def process_markdown_file(input_file, output_file):
+def process_markdown_file(input_file: Path|str, output_file: Path|str):
     """Process a markdown file to fix errant spaces."""
 
     with open(input_file, 'r', encoding='utf-8') as f:
@@ -213,7 +213,7 @@ def process_markdown_file(input_file, output_file):
     print(f"Processed {input_file} -> {output_file}")
 
 
-def process_folder(input_folder: str, output_folder: str) -> None:
+def process_folder(input_folder: Path|str, output_folder: Path|str) -> None:
     """Process all PDF files in a folder and convert them to markdown."""
     input_path = Path(input_folder)
     output_path = Path(output_folder)
@@ -247,7 +247,34 @@ def process_folder(input_folder: str, output_folder: str) -> None:
 
 
 if __name__ == "__main__":
-    INPUT_FOLDER = "../../data/raw/pdfs"
-    OUTPUT_FOLDER = "../../data/raw/pdfs/markdown_output"
+    import argparse
     
-    process_folder(INPUT_FOLDER, OUTPUT_FOLDER)
+    parser = argparse.ArgumentParser(description="Convert PDFs in a folder to cleaned markdown files.")
+    parser.add_argument(
+        "input", "-i",
+        type=str,
+        required=False,
+        default="../../data/raw/pdfs",
+        help="Path to the PDF file or folder containing PDF files."
+    )
+    parser.add_argument(
+        "output", "-o",
+        type=str,
+        required=False,
+        default="../../data/raw/pdfs/markdown_output",
+        help="Name of output file or path to the folder where outputs should be saved."
+    )
+
+    args = parser.parse_args()
+    INPUT = Path(args.input_folder)
+    OUTPUT = Path(args.output_folder)
+
+    if INPUT.is_dir() and OUTPUT.is_dir():
+        process_folder(INPUT, OUTPUT)
+    elif INPUT.is_file() and OUTPUT.is_file():
+        process_markdown_file(INPUT, OUTPUT)
+    elif INPUT.is_file() and OUTPUT.is_dir():
+        output_file = OUTPUT / (INPUT.stem + '.md')
+        process_markdown_file(INPUT, output_file)
+    else:
+        print("Input configuration not recognized. Please provide valid file or directory paths.")

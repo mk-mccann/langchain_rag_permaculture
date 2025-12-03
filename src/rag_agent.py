@@ -1,17 +1,13 @@
 from pathlib import Path
 from typing import Any
 
+from langchain_core.documents import Document
 from langchain_chroma import Chroma
 from langchain_mistralai import ChatMistralAI
 from langchain_mistralai.embeddings import MistralAIEmbeddings
-from langchain_core.documents import Document
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, AgentState
-from langchain.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver  
-from langchain.messages import RemoveMessage
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
-from langgraph.runtime import Runtime
 
 
 # ---------------------------------------------------------------------------

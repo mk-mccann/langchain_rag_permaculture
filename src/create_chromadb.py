@@ -523,11 +523,12 @@ class CreateChromaDB:
 
 
 if __name__ == "__main__":
-    import os
+    import argparse
+    from os import getenv
     from dotenv import load_dotenv
 
     load_dotenv()
-    api_key_str = os.getenv("MISTRAL_API_KEY")
+    api_key_str = getenv("MISTRAL_API_KEY")
     
     if not api_key_str:
         raise ValueError("MISTRAL_API_KEY not found in environment variables")
@@ -537,14 +538,73 @@ if __name__ == "__main__":
     # Setup Mistral model and embeddings
     embeddings = MistralAIEmbeddings(api_key=api_key_str, model="mistral-embed")
 
+    # Setup argument parser
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "input_directory",
+        type=str,
+        default="../data/chunked_documents/",
+        required=True,
+        help="Directory containing chunked JSONL documents"
+    )
+    parser.add_argument(
+        "vectorstore_path", "vectorstore",
+        type=str,
+        default="../chroma_db",
+        required=True,
+        help="Path to store the ChromaDB vector database"
+    )
+    parser.add_argument(
+        "collection_name", "database_name",
+        type=str,
+        default="perma_rag_collection",
+        required=False,
+        help="Name of the ChromaDB collection"
+    )
+    parser.add_argument(
+        "logs_directory",
+        type=str,
+        default="../logs/",
+        required=False,
+        help="Directory to store logs like checkpoints and failed batches"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=100,
+        required=False,
+        help="Number of documents to process in each batch"
+    )
+    parser.add_argument(
+        "--delay_seconds",
+        type=float,
+        default=1,
+        required=False,
+        help="Seconds to wait between batches"
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=True,
+        help="Resume from last checkpoint if available"
+    )
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        default=False,
+        help="Enable incremental updates (process only new/modified files)"
+    )
+
+    args = parser.parse_args()
+
     # Setup and create ChromaDB
     creator = CreateChromaDB(
         embeddings=embeddings,
-        collection_name="perma_rag_collection",
-        chunked_docs_dir=Path("../data/chunked_documents/"),
-        chroma_db_dir=Path("../chroma_db"),
-        checkpoint_file=Path("../logs/embedding_progress.json"),
-        failed_batches_file=Path("../logs/failed_batches.txt")
+        collection_name=args.collection_name,
+        chunked_docs_dir=Path(args.input_directory),
+        chroma_db_dir=Path(args.vectorstore_path),
+        checkpoint_file=Path(args.logs_directory)/"embedding_checkpoint.json",
+        failed_batches_file=Path(args.logs_directory)/"failed_batches.txt"
     )
 
     # Use the new method with checkpointing, retry logic, and incremental updates
@@ -552,7 +612,10 @@ if __name__ == "__main__":
     # Set incremental=False and resume=False to rebuild the entire database from scratch
     # If incremental=True and resume=False, it will reprocess new/modified documents from the start
     # If incremental=False and resume=True, it will resume full processing from the last checkpoint
-    creator.embed_and_store(batch_size=100, delay_seconds=1, resume=True, incremental=False)
+    creator.embed_and_store(batch_size=args.batch_size, 
+                            delay_seconds=args.delay_seconds, 
+                            resume=args.resume, 
+                            incremental=args.incremental)
     
     # Retry failed batches if needed
     creator.retry_failed_batches()

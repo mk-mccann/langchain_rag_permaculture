@@ -614,26 +614,25 @@ class MarkdownChunkerWithKeywordExtraction:
         return all_documents
     
 
-
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--data-directory",
+        "input_directory",
         type=str,
         default="../data/raw",
         required=True,
         help="Directory containing markdown files to chunk"
     )
     parser.add_argument(
-        "--max-workers",
+        "n_workers",
         type=int,
         default=None,
         help="Maximum number of parallel workers for chunking"
     )
     parser.add_argument(
-        "--force-reprocess",
+        "--force_reprocess",
         action="store_true",
         help="Force reprocessing of all files regardless of cache"
     )
@@ -645,7 +644,7 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-    directory_path = Path(args.data_directory)
+    input_directory = Path(args.input_directory)
     
     chunker = MarkdownChunkerWithKeywordExtraction(
         num_keywords=5,
@@ -653,14 +652,14 @@ if __name__ == "__main__":
         use_mmr=False,
         split_by_nlp=False,
         split_by_headers=False,
-        cache_dir=directory_path.parents[1] / "chunked_documents"
+        cache_dir=input_directory.parents[1] / "chunked_documents"
     )
     
     documents = chunker.process_directory(
-        directory_path,
+        input_directory,
         extract_keywords=args.no_keywords,
         force_reprocess=args.force_reprocess,
-        max_workers=args.max_workers
+        max_workers=args.n_workers
     )
     
     print(f"Total documents created: {len(documents)}")

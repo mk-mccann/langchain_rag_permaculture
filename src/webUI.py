@@ -190,10 +190,44 @@ def create_demo():
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run the RAG Agent Web UI")
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        required=False,
+        help="Host address to run the Gradio app on."
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=7860,
+        required=False,
+        help="Port to run the Gradio app on."
+    )
+    parser.add_argument(
+        "--share",
+        type=bool,
+        default=False,
+        action="store_true",
+        help="Generate publicly sharable link."
+    )
+    parser.add_argument(
+        "--debug",
+        type=bool,
+        default=True,
+        action="store_true",
+        help="Enable debug mode."
+    )
+
+    args = parser.parse_args()
+
     demo = create_demo()
     demo.launch(
-        share=False,  # Set to True to create a public link
-        server_name="127.0.0.1",
-        server_port=7860,
-        show_error=True
+        share=args.share,  # Set to True to create a public link
+        server_name=args.host,
+        server_port=args.port,
+        show_error=args.debug
     )

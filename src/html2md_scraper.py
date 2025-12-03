@@ -28,7 +28,7 @@ DISALLOWED_FILE_TYPES = [
 
 DISALLOWED_PAGE_TYPES = [
     'File:', 'Schematic:', 'Category:', 'Special:', 
-    'Template:', 'one-community-welcomes'
+    'Template:', 'one-community-welcomes', '/tag/'
 ]
 
 
@@ -330,8 +330,51 @@ class HTML2MDScraper:
 
 
 if __name__ == "__main__":
-    input_file = Path("../config/urls.json")
-    base_output_dir = Path("../data/raw/md_scraped_pages")
+    import argparse
 
-    scraper = HTML2MDScraper(base_output_dir=base_output_dir, target_langs=['en'], delay_seconds=1)
-    scraper.process_config(input_file, workers=4)
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "config_file",
+        type=str,
+        default="../config/urls.json",
+        required=True,
+        help="Path to config JSON file with URLs to scrape."
+    )
+    parser.add_argument(
+        "output_dir",
+        type=str,
+        default="../data/raw/md_scraped_pages",
+        required=True,
+        help="Directory to save scraped webpages as Markdown files."
+    )
+    parser.add_argument(
+        "n_workers", 
+        type=int, 
+        default=4, 
+        required=False,
+        help="Number of concurrent workers for crawling."
+        )
+    parser.add_argument(
+        "delay_seconds", 
+        type=int, 
+        default=1, 
+        required=False,
+        help="Delay in seconds between requests to the same site."
+        )
+    parser.add_argument(
+        "target-langs",
+        type=str,
+        nargs='+',
+        default=['en'],
+        help="List of target languages for filtering pages."
+    )
+
+    args = parser.parse_args()
+    config_file = Path(args.config_file)
+    base_output_dir = Path(args.output_dir)
+    workers = args.n_workers
+    delay_seconds = args.delay_seconds
+    target_langs = args.target_langs
+
+    scraper = HTML2MDScraper(base_output_dir=base_output_dir, target_langs=target_langs, delay_seconds=delay_seconds)
+    scraper.process_config(config_file, workers=workers)

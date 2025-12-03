@@ -17,6 +17,7 @@ Functions:
 
 
 import re
+import sys
 from os import cpu_count
 from typing import Optional, Dict, Tuple, Any
 
@@ -827,41 +828,58 @@ def print_results(results: Dict[str, Any], operation: str = "Processing"):
 # ============================================================================
 
 if __name__ == "__main__":
-    import sys
-    
-    # Example usage
+    import argparse
+
     print("Markdown Processor Utility")
     print("=" * 60)
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "target",
+        type=str,
+        required=True,
+        default="../../data/raw/md_scraped_pages",
+        help="Path to a markdown file or directory to process."
+    )
+    parser.add_argument(
+        "workers",
+        type=int,
+        required=False,
+        default=None,
+        help="Number of parallel workers for directory processing."
+    )
+    parser.add_argument(
+        "--verbose", "-v",
+        type=bool,
+        required=False,
+        default=False,
+        help="Enable verbose output."
+    )
+    parser.add_argument(
+        "--process_frontmatter",
+        type=bool,
+        required=False,
+        default=False,
+        help="Whether to update frontmatter during processing."
+    )
+
+    args = parser.parse_args()
+    target = Path(args.target)
+    workers = args.workers
+    verbose = args.verbose
+    process_frontmatter = args.process_frontmatter
     
-    # Default directory
-    default_dir = Path("../../data/raw/md_scraped_pages")
+    if target.is_file():
+        # Process single file
+        print(f"\nProcessing single file: {target}")
+        results = process_single_file(target, verbose=verbose, update_frontmatter=process_frontmatter)
+        print_results(results, "Single File Processing")
     
-    # Process based on command line args
-    if len(sys.argv) > 1:
-        target = Path(sys.argv[1])
-        
-        if target.is_file():
-            # Process single file
-            print(f"\nProcessing single file: {target}")
-            results = process_single_file(target, verbose=True, update_frontmatter=False)
-            print_results(results, "Single File Processing")
-        
-        elif target.is_dir():
-            # Process directory
-            print(f"\nProcessing directory: {target}")
-            results = process_directory(target, verbose=False, update_frontmatter=False, workers=3)
-            print_results(results, "Directory Processing")
-        
-        else:
-            print(f"Error: {target} does not exist")
+    elif target.is_dir():
+        # Process directory
+        print(f"\nProcessing directory: {target}")
+        results = process_directory(target, verbose=verbose, update_frontmatter=process_frontmatter, workers=workers)
+        print_results(results, "Directory Processing")
     
     else:
-        # Default: process default directory
-        if default_dir.exists():
-            print(f"\nProcessing default directory: {default_dir}")
-            results = process_directory(default_dir, verbose=False, update_frontmatter=True, workers=3)
-            print_results(results, "Directory Processing")
-        else:
-            print(f"Default directory does not exist: {default_dir}")
-            print("\nUsage:")
-            print(f"  python {Path(__file__).name} <file_or_directory>")
+        print(f"Error: {target} does not exist")
