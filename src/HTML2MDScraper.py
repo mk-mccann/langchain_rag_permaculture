@@ -212,7 +212,7 @@ class HTML2MDScraper:
         print("\nScraping completed.")
 
 
-if __source__ == "__main__":
+if __name__ == "__main__":
     input_file = Path("../config/urls.json")
     base_output_dir = Path("../data/raw/scraped_pages")
 
