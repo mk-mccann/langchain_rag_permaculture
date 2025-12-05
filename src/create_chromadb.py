@@ -402,7 +402,6 @@ class CreateChromaDB:
 
                     batch = documents[i:i + batch_size]
                     batch_num = i // batch_size + 1
-                    bar.text=f"Processing batch {batch_num}/{total_batches} (indices {i}-{i+len(batch)-1})" 
                                         
                     try:
                         self.add_batch_with_retry(batch)
@@ -585,6 +584,11 @@ if __name__ == "__main__":
         "--rebuild",
         action="store_true",
         help="Enable full database rebuild, otherwise only process new/modified files"
+    )
+    parser.add_argument(
+        "--retry_failed",
+        action="store_true",
+        help="Retry embedding for previously failed batches"
     )
 
     args = parser.parse_args()

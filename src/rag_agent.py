@@ -52,15 +52,24 @@ def build_citation(doc: Document, source_number: int) -> dict:
     - source_number, title, header, url, page, file, file_path, metadata, citation_text
     """
     md = doc.metadata if hasattr(doc, 'metadata') and isinstance(doc.metadata, dict) else {}
+    
+    # Normalize string "None" to actual None and decode bytes to str
+    for key in list(md.keys()):
+        if isinstance(md[key], bytes):
+            md[key] = md[key].decode('utf-8', errors='ignore')
+        if md[key] == "None":
+            md[key] = None
+
+
     source = md.get('source') or 'Unknown'
     title = md.get('title') or 'Unknown'
     header = format_header_chain(md)
     url = md.get('url', None)
     page = md.get('page', None)
     file_label = md.get('file_path') or md.get('path') or 'Unknown'
-    file_path = md.get('file_path')
+    file_path = md.get('file_path')    
 
-    citation_text = f"[Source {source_number}] (Source: {source}, Title: {title}, "
+    citation_text = f"[{source_number}] {source}: {title}, "
     if header:
         citation_text += f"Section: {header}, "
     if url is not None:
@@ -68,8 +77,13 @@ def build_citation(doc: Document, source_number: int) -> dict:
     if page is not None:
         citation_text += f"Page: {page}, "
 
+    if url is not None:
+        hyperlink_citation = f"[{source_number}] [{source}: {title}]({url})"
+    else:
+        hyperlink_citation = None
+
     # Trim any trailing comma + space and close paren
-    citation_text = citation_text.rstrip(', ') + ")"
+    citation_text = citation_text.rstrip(', ')
 
     return {
         "source_number": source_number,
@@ -82,6 +96,7 @@ def build_citation(doc: Document, source_number: int) -> dict:
         "file_path": file_path,
         "metadata": md,
         "citation_text": citation_text,
+        "hyperlink_citation": hyperlink_citation
     }
 
 
@@ -90,7 +105,7 @@ def format_citation_line(citation: dict, include_content: str | None = None) -> 
 
     include_content: if provided, appended after the citation line separated by newline.
     """
-    base = citation.get("citation_text") or ""
+    base = citation.get("hyperlink_citation") if citation.get("hyperlink_citation") else (citation.get("citation_text") or "")
     if include_content:
         return f"{base}\n{include_content}"
     return base
@@ -133,7 +148,7 @@ class RetrieveDocumentsMiddleware(AgentMiddleware[CustomAgentState]):
         augmented_message_content = (
             f"{last_message.content}\n\n"
             "Use the following context to answer the query. "
-            "When using information from the context, cite the source number (e.g., [Source 1]):\n\n"
+            "When using information from the context, cite the source number (e.g., [1]):\n\n"
             f"{docs_content}"
         )
         
@@ -333,7 +348,8 @@ class RAGAgent:
         retrieved = result.get("context") or result.get("sources") or []
 
         for idx, doc in enumerate(retrieved, 1):
-            citation = build_citation(doc, idx)
+            citation_dict = build_citation(doc, idx)
+            citation = format_citation_line(citation_dict)
             # Expose a consistent, enriched source dict to callers
             sources.append(citation)
         
@@ -374,8 +390,9 @@ class RAGAgent:
         print(result["answer"])
         print("\n" + "-"*50 + "\n")
         print("Sources:")
+
         for source in result["sources"]:
-            print(f"  [Source {source['source_number']}] {source['file']}, Page: {source['page']}")
+            print(source)
 
 
 
@@ -388,7 +405,7 @@ if __name__ == "__main__":
 
     agent = RAGAgent(
         chroma_db_dir = Path("../chroma_db"),
-        collection_name = "perma_rag_collection",
+        collection_name = "ragrarian",
         model_name = "mistral-small-latest",
         embeddings_model = "mistral-embed",
     )
@@ -396,7 +413,7 @@ if __name__ == "__main__":
     # agent._test_query_prompt_with_context()
 
     # Option 1: Interactive chat
-    agent.chat(thread_id="session_1")
+    # agent.chat(thread_id="session_1")
     
     # Option 2: Single query with sources
-    # agent._test_query_with_sources()
+    agent._test_query_with_sources()
