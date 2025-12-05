@@ -1,9 +1,9 @@
 *.pyc
 .env
+.gradio
 .vscode/
 .pytest_cache/
 chroma_db/
 data/
 logs/
-*/__pycache_/
-*/.pytest_cache
+__pycache_/
