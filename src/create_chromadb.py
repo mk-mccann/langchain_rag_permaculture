@@ -326,7 +326,7 @@ class CreateChromaDB:
                         batch_size: int = 100, 
                         delay_seconds: float = 1,
                         resume: bool = True,
-                        incremental: bool = True):
+                        rebuild: bool = False):
         """
         Embed and store the loaded documents into the ChromaDB vector database in batches.
         
@@ -334,14 +334,14 @@ class CreateChromaDB:
             batch_size (int): Number of documents to process in each batch. Default is 100.
             delay_seconds (float): Seconds to wait between batches. Default is 1.
             resume (bool): Whether to resume from checkpoint. Default is True.
-            incremental (bool): Whether to only process new/modified files. Default is True.
+            rebuild (bool): Whether to rebuild the whole database or only process new/modified files. Default is False.
         """
         
         # Determine which files to process
         file_filter = None
         modified_source_files = set()
         
-        if incremental:
+        if not rebuild:
             # Check that index file exists
             index = self.load_index()
 
@@ -541,61 +541,54 @@ if __name__ == "__main__":
     # Setup argument parser
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "input_directory",
+        "--input_directory", "--input", "-i",
         type=str,
         default="../data/chunked_documents/",
-        required=True,
         help="Directory containing chunked JSONL documents"
     )
     parser.add_argument(
-        "vectorstore_path", "vectorstore",
+        "--vectorstore_path", "--vectorstore",
         type=str,
         default="../chroma_db",
-        required=True,
         help="Path to store the ChromaDB vector database"
     )
     parser.add_argument(
-        "collection_name", "database_name",
+        "--collection_name", "--database_name",
         type=str,
-        default="perma_rag_collection",
-        required=False,
+        default="default_collection",
         help="Name of the ChromaDB collection"
     )
     parser.add_argument(
-        "logs_directory",
+        "--logs_directory", "--log",
         type=str,
         default="../logs/",
-        required=False,
         help="Directory to store logs like checkpoints and failed batches"
     )
     parser.add_argument(
         "--batch_size",
         type=int,
         default=100,
-        required=False,
         help="Number of documents to process in each batch"
     )
     parser.add_argument(
         "--delay_seconds",
         type=float,
         default=1,
-        required=False,
         help="Seconds to wait between batches"
     )
     parser.add_argument(
         "--resume",
         action="store_true",
-        default=True,
         help="Resume from last checkpoint if available"
     )
     parser.add_argument(
-        "--incremental",
+        "--rebuild",
         action="store_true",
-        default=False,
-        help="Enable incremental updates (process only new/modified files)"
+        help="Enable full database rebuild, otherwise only process new/modified files"
     )
 
     args = parser.parse_args()
+    print(args)
 
     # Setup and create ChromaDB
     creator = CreateChromaDB(
@@ -608,14 +601,14 @@ if __name__ == "__main__":
     )
 
     # Use the new method with checkpointing, retry logic, and incremental updates
-    # Set incremental=True and resume=True (default) to only process new or modified documents
-    # Set incremental=False and resume=False to rebuild the entire database from scratch
-    # If incremental=True and resume=False, it will reprocess new/modified documents from the start
-    # If incremental=False and resume=True, it will resume full processing from the last checkpoint
+    # Set rebuild=False and resume=True (default) to only process new or modified documents
+    # Set rebuild=True and resume=False to rebuild the entire database from scratch
+    # If rebuild=False and resume=False, it will reprocess new/modified documents from the start
+    # If rebuild=True and resume=True, it will resume full processing from the last checkpoint
     creator.embed_and_store(batch_size=args.batch_size, 
                             delay_seconds=args.delay_seconds, 
                             resume=args.resume, 
-                            incremental=args.incremental)
+                            rebuild=args.rebuild)
     
     # Retry failed batches if needed
     creator.retry_failed_batches()

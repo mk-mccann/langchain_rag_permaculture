@@ -142,7 +142,7 @@ class HTML2MDScraper:
 
 
     @staticmethod
-    def bs4_to_md(soup: BeautifulSoup, **options):
+    def bs4_to_md(soup: BeautifulSoup, **options) -> str:
         """
         Convert BeautifulSoup object to Markdown string.
         

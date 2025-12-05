@@ -6,6 +6,7 @@ from alive_progress import alive_bar
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
+from threading import Lock
 
 import spacy
 import hashlib  
@@ -73,6 +74,7 @@ class MarkdownChunkerWithKeywordExtraction:
         # Track processed files
         self.index_file = self.cache_dir / "index.json"
         self.processed_files = self._load_index()
+        self._index_lock = Lock()  # Thread lock for safe concurrent access
         
         # Define headers to split on
         self.headers_to_split_on = [
@@ -290,12 +292,13 @@ class MarkdownChunkerWithKeywordExtraction:
 
                 # Convert any date objects to ISO format strings for JSON serialization
                 if frontmatter:
-                    for key, value in frontmatter.items():
+                    for key, value in list(frontmatter.items()):
                         if key in ['access_date', 'date']:
                             frontmatter[key] = str(value)
                         if isinstance(value, str):
                             # Preserve special characters as strings
                             frontmatter[key] = value.encode('utf-8').decode('unicode_escape')
+               
                 # Remove frontmatter from content
                 content = markdown_content[match.end():]
                 return frontmatter or {}, content
@@ -501,14 +504,17 @@ class MarkdownChunkerWithKeywordExtraction:
                 # Fast check: compare mtime and size
                 try:
                     current_mtime, current_size = self._get_file_stats(file_path)
+                    
+                    # Unchanged: skip reprocessing
                     if current_mtime == cached_mtime and current_size == cached_size:
-                        # Unchanged: skip reprocessing
                         return self.load_documents_jsonl(cache_file)
+                    
                     # Changed: verify with content hash
                     current_hash = self._sha256_file(file_path)
                     if current_hash == cached_hash:
                         # False positive from mtime/size; content unchanged
                         return self.load_documents_jsonl(cache_file)
+                
                 except Exception:
                     # File issue; reprocess
                     pass
@@ -532,17 +538,20 @@ class MarkdownChunkerWithKeywordExtraction:
         
         # Also record JSONL mtime for diagnostics/fallback
         jsonl_mtime = (self.cache_dir / cache_file).stat().st_mtime if (self.cache_dir / cache_file).exists() else None
-        self.processed_files[cache_key] = {
-            'file_path': file_path,
-            'mtime': mtime,
-            'size': size,
-            'content_hash': content_hash,
-            'cache_file': cache_file,
-            'jsonl_mtime': jsonl_mtime,
-            'num_chunks': len(documents),
-            'processed_at': datetime.now().isoformat()
-        }
-        self._save_index()
+        
+        # Thread-safe update of processed_files dictionary
+        with self._index_lock:
+            self.processed_files[cache_key] = {
+                'file_path': file_path,
+                'mtime': mtime,
+                'size': size,
+                'content_hash': content_hash,
+                'cache_file': cache_file,
+                'jsonl_mtime': jsonl_mtime,
+                'num_chunks': len(documents),
+                'processed_at': datetime.now().isoformat()
+            }
+            self._save_index()
         
         return documents
     
@@ -590,6 +599,7 @@ class MarkdownChunkerWithKeywordExtraction:
                     extract_keywords
                 )
                 return path, docs
+            
             except Exception as e:
                 print(f"Error processing {path}: {e}")
                 return path, []
@@ -597,6 +607,7 @@ class MarkdownChunkerWithKeywordExtraction:
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {executor.submit(_process, p): p for p in md_files}
             processed = 0
+            total_chunks = 0
 
             with alive_bar(len(md_files), title="Chunking markdown files", dual_line=True) as bar:
 
@@ -607,10 +618,10 @@ class MarkdownChunkerWithKeywordExtraction:
                         all_documents.extend(docs)
 
                     processed += 1
-                    bar.text = f"Processed {processed}/{len(md_files)} files"
+                    total_chunks += len(docs)
                     bar()
 
-        print(f"\nTotal: {len(all_documents)} chunks from {len(md_files)} files")
+        print(f"\nTotal: {total_chunks} chunks from {len(md_files)} files")
         return all_documents
     
 
@@ -622,44 +633,61 @@ if __name__ == "__main__":
         "input_directory",
         type=str,
         default="../data/raw",
-        required=True,
         help="Directory containing markdown files to chunk"
     )
     parser.add_argument(
-        "n_workers",
+        "--split_type",
+        type=str,
+        choices=["headers", "nlp", "size"],
+        default="size",
+        help="Chunking method: 'headers' for MD-header-based, 'nlp' for NLP-based, 'size' for size-based"
+    )
+    parser.add_argument(
+        "--workers",
         type=int,
         default=None,
         help="Maximum number of parallel workers for chunking"
+    )
+    parser.add_argument(
+        "--keywords",
+        default=True, 
+        action=argparse.BooleanOptionalAction,
+        help="Enable/disable keyword extraction"
     )
     parser.add_argument(
         "--force_reprocess",
         action="store_true",
         help="Force reprocessing of all files regardless of cache"
     )
-    parser.add_argument(
-        "--no-keywords",
-        action="store_true",
-        default=False,
-        help="Disable keyword extraction"
-    )
 
     args = parser.parse_args()
     input_directory = Path(args.input_directory)
+
+    split_selection = args.split_type.lower()
+    if split_selection == "headers":
+        split_by_headers = True
+        split_by_nlp = False
+    elif split_selection == "nlp":
+        split_by_headers = False
+        split_by_nlp = True
+    else:
+        split_by_headers = False
+        split_by_nlp = False
     
     chunker = MarkdownChunkerWithKeywordExtraction(
         num_keywords=5,
         use_maxsum=False,
         use_mmr=False,
-        split_by_nlp=False,
-        split_by_headers=False,
+        split_by_nlp=split_by_nlp,
+        split_by_headers=split_by_headers,
         cache_dir=input_directory.parents[1] / "chunked_documents"
     )
     
     documents = chunker.process_directory(
         input_directory,
-        extract_keywords=args.no_keywords,
+        extract_keywords=args.keywords,
         force_reprocess=args.force_reprocess,
-        max_workers=args.n_workers
+        max_workers=args.workers
     )
     
     print(f"Total documents created: {len(documents)}")
