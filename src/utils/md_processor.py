@@ -17,14 +17,12 @@ Functions:
 
 
 import re
-import sys
 from os import cpu_count
 from typing import Optional, Dict, Tuple, Any
 
 from pathlib import Path
 from alive_progress import alive_bar
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 
 # Configuration constants
 DISALLOWED_FILE_TYPES = [
@@ -135,9 +133,6 @@ def remove_duplicate_lines(content: str) -> Tuple[str, bool]:
     return cleaned_content, cleaned_content != content
 
 
-# def remove_duplicated_headings(md_content: str) -> str:
-
-
 def standardize_headings(md_content: str) -> str:
     # Split frontmatter and content
     parts = re.split(r'^---\n.*?\n---\n', md_content, flags=re.DOTALL, maxsplit=1)
@@ -152,13 +147,194 @@ def standardize_headings(md_content: str) -> str:
     return frontmatter + content
 
 
+def fix_broken_yaml_delimiters(md_content: str) -> str:
+    """
+    Fix YAML frontmatter where --- delimiter is incorrectly placed, splitting a field value.
+    
+    Example broken frontmatter:
+        ---
+        source: One Community Global
+        title: Vermiculture Toilets, 100% Water Self-sufficient Bathrooms and Ultra-eco Shower
+        ---
+        Designs
+        author: ''
+        url: https://onecommunityglobal.org/example/
+        access_date: '2025-12-02'
+        license: CC BY 3.0
+        ## description: ''
+        
+    Should become:
+        ---
+        source: One Community Global
+        title: Vermiculture Toilets, 100% Water Self-sufficient Bathrooms and Ultra-eco Shower Designs
+        author: ''
+        url: https://onecommunityglobal.org/example/
+        access_date: '2025-12-02'
+        license: CC BY 3.0
+        description: ''
+        ---
+    
+    Args:
+        md_content: Markdown content with potentially broken frontmatter
+        
+    Returns:
+        Fixed markdown content
+    """
+    lines = md_content.split('\n')
+    
+    # Check if there's frontmatter
+    if not lines or lines[0].strip() != '---':
+        return md_content
+    
+    # Find all --- delimiters in the first 25 lines
+    delimiter_indices = [i for i, line in enumerate(lines[:25]) if line.strip() == '---']
+    
+    # Need at least 2 delimiters (opening and closing)
+    if len(delimiter_indices) < 2:
+        return md_content
+    
+    # Check if the second delimiter (index 1) appears too early
+    # Typical frontmatter has 6-10 fields, so second delimiter should be around line 7-12
+    second_delimiter = delimiter_indices[1]
+    
+    # If second delimiter is too early (< 5 lines) and there are lines after it that look like frontmatter,
+    # then it's likely misplaced
+    if second_delimiter < 5:
+        # Look for actual frontmatter fields after this delimiter
+        frontmatter_after = []
+        actual_content_start = None
+        
+        for i in range(second_delimiter + 1, min(len(lines), 25)):
+            line = lines[i].strip()
+            
+            if not line:
+                continue
+
+            # Check if the line contains any of the frontmatter keys plus a :
+            if re.match(r'^(source|title|author|url|access_date|date|license|description|keywords):', line):
+                frontmatter_after.append(i)
+                continue
+        
+            # Sometimes the title or description may be split without a key. This is hard to detect, 
+            # but the following line is always a key-value pair or content.
+            if ':' not in line and i < len(lines) - 1:
+                # Check if following lines contain key-value pairs
+                if ':' in lines[i + 1].strip():
+                    if "url:" in lines[i + 1].strip():
+                        frontmatter_after.append(i)
+                        continue
+                    elif ("https:" in lines[i + 1].strip() or "http:" in lines[i + 1].strip()) and not ("url:" in lines[i + 1].strip()):
+                        actual_content_start = i + 1
+                        break
+                elif '---' in lines[i+1].strip():
+                    actual_content_start = i + 2
+                    break
+
+        # If we found frontmatter-like lines after the second delimiter, it's misplaced
+        if frontmatter_after:
+            # The line before the misplaced --- is incomplete
+            # Find where actual frontmatter ends
+            last_fm_line = max(frontmatter_after)
+            
+            # Look for a line that's NOT frontmatter after last_fm_line
+            proper_closing_line = last_fm_line + 1
+            for i in range(last_fm_line + 1, min(len(lines), 25)):
+                line = lines[i].strip()
+                if line and ':' not in line and not line.startswith('##'):
+                    # This is actual content, frontmatter ends just before
+                    proper_closing_line = i
+                    break
+            else:
+                # Didn't find content start, frontmatter ends at last_fm_line
+                proper_closing_line = last_fm_line + 1
+            
+            # Reconstruct: opening ---, all frontmatter (including after misplaced ---), closing ---, content
+            fixed_lines = [lines[0]]  # Opening ---
+            
+            # Add all frontmatter lines, joining the split field and cleaning ## prefixes
+            for i in range(1, proper_closing_line):
+                line = lines[i]
+                if line.strip() == '---' and i == second_delimiter:
+                    # This is the misplaced delimiter - merge previous and next line
+                    if i + 1 < len(lines):
+                        next_line = lines[i + 1].strip()
+                        # If next line doesn't start with a key (no ':' at start), it's a continuation
+                        if next_line and not next_line.split()[0].endswith(':'):
+                            # Append to previous line
+                            if fixed_lines:
+                                fixed_lines[-1] = fixed_lines[-1] + ' ' + next_line
+                            # Skip the next line since we merged it
+                            continue
+                else:
+                    # Regular line - only add if not already merged
+                    if i > second_delimiter:
+                        # Check if this line was the one we just merged
+                        if i == second_delimiter + 1:
+                            # Check if previous line had the misplaced ---
+                            if second_delimiter in range(1, i):
+                                continue  # Skip this line, it was merged
+                    
+                    # Clean up ## prefix from frontmatter fields
+                    cleaned_line = line
+                    if line.strip().startswith('##') and ':' in line:
+                        # Remove ## prefix (could be ## or ###, etc.)
+                        cleaned_line = re.sub(r'^(\s*)#+\s*', r'\1', line)
+                    
+                    fixed_lines.append(cleaned_line)
+            
+            # Add proper closing delimiter
+            fixed_lines.append('---')
+            
+            # Add remaining content
+            fixed_lines.extend(lines[proper_closing_line:])
+            
+            return '\n'.join(fixed_lines)
+
+    # Check how many lines we have between the description field and the next delimiter. In
+    # principle, there should be one to two line only (the description value and maybe the keywords field). 
+    # If there are multiple lines, move the delimiter to immediately after the desciption field. 
+    description_index = [i for i, line in enumerate(lines[:25]) if 'description:' in line.strip()]
+    line_after_description = lines[description_index[0] + 1].strip() if description_index else ''
+
+    if (second_delimiter - description_index[0] > 2) == 1:
+        # This is correct - do nothing
+        return md_content
+    elif (second_delimiter - description_index[0] > 2) and "keywords:" not in line_after_description:
+        # Move the delimiter to immediately after the description field
+        fixed_lines = lines[:description_index[0] + 1] + ['---'] + lines[description_index[0] + 1:second_delimiter] + lines[second_delimiter + 1:]
+        return '\n'.join(fixed_lines)
+    elif (second_delimiter - description_index[0] > 2) and "keywords:" in line_after_description:
+        # Move the delimiter to immediately after the keywords field
+        keywords_index = description_index[0] + 1
+        fixed_lines = lines[:keywords_index + 1] + ['---'] + lines[keywords_index + 1:second_delimiter] + lines[second_delimiter + 1:]
+        return '\n'.join(fixed_lines)
+    else:
+        # This means there's likely an issue with a weird description field - leave as is because so far we don't
+        # have a good way to fix this
+        return md_content
+
+
 def fix_frontmatter(md_content: str) -> Tuple[str, str]:
+    """
+    Fix and extract frontmatter from markdown content.
+    First fixes broken YAML delimiters, then extracts and cleans frontmatter.
+    
+    Args:
+        md_content: Markdown content with frontmatter
+        
+    Returns:
+        Tuple of (frontmatter_string, content_without_frontmatter)
+    """
+    # First, fix any broken YAML delimiters
+    md_content = fix_broken_yaml_delimiters(md_content)
+    
     # Split the content into lines
     lines = md_content.split('\n')
 
     # Find the index of the last line in the frontmatter (contains ':')
     last_frontmatter_index = 0
     for i, line in enumerate(lines):
+ 
         # Check for URLs that are NOT part of the frontmatter key (break on content URLs)
         if ("https:" in line or "http:" in line) and not ("url: https:" in line or "url: http:" in line):
             break  # Stop at first URL in content (not frontmatter)
@@ -181,7 +357,7 @@ def fix_frontmatter(md_content: str) -> Tuple[str, str]:
     unique_frontmatter_lines = []
     for line in frontmatter_lines:
         if "##" in line:
-            continue  # Skip comment lines
+            line = line.lstrip('#').strip()  # Remove leading ## for comments
         key = line.split(':', 1)[0].strip()
         if key not in seen_keys:
             unique_frontmatter_lines.append(line)
@@ -354,28 +530,31 @@ def clean_single_file(
     original_content = content
 
     # Fix frontmatter
-    frontmatter, content = fix_frontmatter(content)
+    content = fix_broken_yaml_delimiters(content)
+    frontmatter, body = parse_frontmatter(content)
+    frontmatter = build_frontmatter(frontmatter)
+    frontmatter = f"---\n{frontmatter}\n---\n"
         
     # Remove boilerplate
     if remove_boilerplate_text:
-        content, modified = remove_boilerplate(content)
+        content, modified = remove_boilerplate(body)
         if modified:
             results['changes'].append('removed_boilerplate')
     
     # Remove duplicate lines
     if remove_duplicates:
-        content, modified = remove_duplicate_lines(content)
+        body, modified = remove_duplicate_lines(body)
         if modified:
             results['changes'].append('removed_duplicates')
 
     # Standardize headings
-    content_before_headings = content
-    content = standardize_headings(content)
-    if content != content_before_headings:
+    content_before_headings = body
+    body = standardize_headings(body)
+    if body != content_before_headings:
         results['changes'].append('standardized_headings')
     
     # Rebuild full content
-    content = frontmatter + content
+    content = frontmatter + body
 
     # Write back if modified
     if content != original_content:
@@ -466,17 +645,33 @@ def update_single_file_frontmatter(
     if 'name' in frontmatter_dict:
         del frontmatter_dict['name']
 
-    # Occasionally the description field may have colons in it, and we want to fix that because it
-    # can break parsers since it thinks it's a new key. So we replace colons with dashes in description.
-    for key in frontmatter_dict.keys():
-        if key not in FRONTMATTER_KEY_ORDER:
-            # This is probably the offending field
-            trailing = " -".join([key, frontmatter_dict[key]])
+    # Eliminate errant keys caused by wrong parsing
+    for key in list(frontmatter_dict.keys()):
+        if key not in FRONTMATTER_KEY_ORDER and key not in (additional_metadata or {}).keys():
+            # Remove unknown key, value pair
+            del frontmatter_dict[key]
 
-            if "description" in frontmatter_dict.keys():
-                frontmatter_dict["description"] = frontmatter_dict["description"] + trailing
-            else:
-                print(trailing + " could not be fixed automatically.")
+    # Often the 'description' field has repeats of the same phrase. Need to eliminate the redundancy.
+    # Interestingly, it can almost always be found where the last and first word of the description are 
+    # smashed together in LWFW
+    if 'description' in frontmatter_dict:
+        desc = str(frontmatter_dict['description'])
+        desc_parts = desc.split(' ')
+        first_word = desc_parts[0]
+        last_word = desc_parts[-1]
+
+        # Check where first and last word are concatenated
+        concat_pattern = last_word + first_word
+        if concat_pattern in desc_parts:
+            concat_index = desc_parts.index(concat_pattern)
+            unique_desc = desc_parts[:concat_index] + [last_word]
+            cleaned_description = " ".join(unique_desc)
+        else:
+            cleaned_description = desc
+
+        if cleaned_description != desc:
+            frontmatter_dict['description'] = cleaned_description
+            results['updated_fields'].append('description')
 
     # Add additional metadata
     if additional_metadata:
@@ -837,33 +1032,30 @@ if __name__ == "__main__":
     parser.add_argument(
         "target",
         type=str,
-        required=True,
         default="../../data/raw/md_scraped_pages",
         help="Path to a markdown file or directory to process."
     )
     parser.add_argument(
-        "workers",
+        "--workers",
         type=int,
-        required=False,
         default=None,
         help="Number of parallel workers for directory processing."
     )
     parser.add_argument(
         "--verbose", "-v",
         type=bool,
-        required=False,
         default=False,
         help="Enable verbose output."
     )
     parser.add_argument(
-        "--process_frontmatter",
+        "--process-frontmatter",
         type=bool,
-        required=False,
         default=False,
         help="Whether to update frontmatter during processing."
     )
 
     args = parser.parse_args()
+    print(args)
     target = Path(args.target)
     workers = args.workers
     verbose = args.verbose
