@@ -3,7 +3,7 @@ import gradio as gr
 from pathlib import Path
 from dotenv import load_dotenv
 
-from rag_agent import RAGAgent, build_citation, format_citation_line
+from rag_agent import RAGAgent
 
 
 # Load environment variables
@@ -98,6 +98,7 @@ def create_demo():
         
         with gr.Tab("Chat"):
             chatbot = gr.ChatInterface(
+                type="messages",
                 fn=chat_interface,
                 title="Chat with the RAGrarian",
                 description="Ask questions about permaculture. Type ""sources"" at any time to see the sources used in the last answer.",
