@@ -3,7 +3,7 @@ import gradio as gr
 from pathlib import Path
 from dotenv import load_dotenv
 
-from src.rag_agent import RAGAgent, build_citation, format_citation_line
+from rag_agent import RAGAgent, build_citation, format_citation_line
 
 
 # Load environment variables
@@ -13,7 +13,7 @@ mistral_api_key = os.getenv("MISTRAL_API_KEY").strip()
 # Initialize the RAG agent
 agent = RAGAgent(
     chroma_db_dir=Path("../chroma_db"),
-    collection_name="perma_rag_collection",
+    collection_name="ragrarian",
     model_name="mistral-small-latest",
     embeddings_model="mistral-embed",
 )
@@ -45,8 +45,7 @@ def chat_with_agent(message, history, thread_id="default"):
         sources_text = "**Sources:**\n\n"
         if result["sources"]:
             for source in result["sources"]:
-                citation = build_citation(source, source['source_number'])
-                sources_text += f"{format_citation_line(citation)}\n "
+                sources_text += f"{source}\n\n"
         else:
             sources_text += "No sources retrieved."
         
@@ -101,7 +100,7 @@ def create_demo():
             chatbot = gr.ChatInterface(
                 fn=chat_interface,
                 title="Chat with the RAGrarian",
-                description="Ask questions about permaculture.",
+                description="Ask questions about permaculture. Type ""sources"" at any time to see the sources used in the last answer.",
                 examples=[
                     "What is permaculture?",
                     "What are the principles of permaculture?",
@@ -209,15 +208,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--share",
-        type=bool,
-        default=False,
         action="store_true",
         help="Generate publicly sharable link."
     )
     parser.add_argument(
         "--debug",
-        type=bool,
-        default=True,
         action="store_true",
         help="Enable debug mode."
     )
@@ -226,8 +221,8 @@ if __name__ == "__main__":
 
     demo = create_demo()
     demo.launch(
-        share=args.share,  # Set to True to create a public link
         server_name=args.host,
         server_port=args.port,
-        show_error=args.debug
+        show_error=args.debug,
+        share=args.share
     )
